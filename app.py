@@ -1,8 +1,25 @@
 from flask import Flask
 from flask_restful import Resource, Api
+from flask_restful import reqparse
 import pexpect
 import time
 import subprocess
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+import datetime
+from threading import Lock
+
+config_lock = Lock()
+
+parser = reqparse.RequestParser()
+parser.add_argument('interval_minutes')
+
+jobstores = {
+    'default': SQLAlchemyJobStore(url='sqlite:///jobs.sqlite')
+}
+
+scheduler = BackgroundScheduler(jobstores=jobstores)
+scheduler.start()
 
 app = Flask(__name__)
 api = Api(app)
@@ -13,10 +30,12 @@ def adb_reboot_device(serial_number):
     subprocess.Popen(adb_reboot.split(), stdout=subprocess.PIPE)
 
 def check_reboot_status(serial_number):
-    adb_get_state = f"adb -s {serial_number} get-state"
+    adb_get_boot_completed = f"adb -s {serial_number} shell getprop sys.boot_completed"
+    
     try:
-        output = subprocess.run(adb_get_state.split(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False).stdout.decode('utf-8')
-        if 'device' in output and 'not found' not in output:
+        output = subprocess.run(adb_get_boot_completed.split(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False).stdout.decode('utf-8').strip()
+        
+        if output == '1':
             return 'OK'
         else:
             return 'Reboot in progress'
@@ -36,9 +55,6 @@ class RebootStatus(Resource):
             return {'status': 'OK', 'message': 'Device is ready.'}, 200
         else:
             return {'status': 'Reboot in progress', 'message': 'Device not ready.'}, 200
-
-api.add_resource(Reboot, '/api/reboot/<string:serial_number>')
-api.add_resource(RebootStatus, '/api/rebootstatus/<string:serial_number>')
 
 class ChangeIP(Resource):
     def get(self, serial_number):
@@ -76,7 +92,38 @@ class ChangeIP(Resource):
             print(f"Error: {str(e)}") 
             return {'status': 'failure', 'message': str(e)}, 500
 
+class AutoChangeIP(Resource):
+    def post(self, serial_number):
+        args = parser.parse_args()
+        interval_minutes = args['interval_minutes']
+
+        # Если interval_minutes равен 'cancel' или 0, отменяем задание
+        if interval_minutes == '0':
+            try:
+                scheduler.remove_job(serial_number)
+                return {'status': 'success', 'message': f'Scheduled IP changes for device {serial_number} have been cancelled'}, 200
+
+            except Exception as e:
+                print(f"Error: {str(e)}")
+                return {'status': 'failure', 'message': str(e)}, 500
+
+        # В противном случае, устанавливаем задание
+        else:
+            interval_minutes = int(interval_minutes)  # конвертируем в int
+            try:
+                scheduler.add_job(func=ChangeIP().get, trigger='interval', minutes=interval_minutes, args=[serial_number], id=serial_number)
+                return {'status': 'success', 'message': f'Airplane mode will be activated and then deactivated every {interval_minutes} minutes'}, 200
+
+            except Exception as e:
+                print(f"Error: {str(e)}")
+                return {'status': 'failure', 'message': str(e)}, 500
+
+api.add_resource(Reboot, '/api/reboot/<string:serial_number>')
+api.add_resource(RebootStatus, '/api/rebootstatus/<string:serial_number>')
 api.add_resource(ChangeIP, '/api/changeip/<string:serial_number>')
+api.add_resource(AutoChangeIP, '/api/changeip/auto/<string:serial_number>')
+
+
 
 if __name__ == '__main__':
     app.run(debug=True)
