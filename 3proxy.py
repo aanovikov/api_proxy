@@ -73,7 +73,8 @@ def user_exists(username):
     with open(ACL_PATH, 'r') as file:
         lines = file.readlines()
         for line in lines:
-            if username in line:
+            parts = line.split(":") # разбиваем строку на части по разделителю ':'
+            if len(parts) > 0 and parts[0] == username: # если первая часть строки точно соответствует имени пользователя
                 return True
     return False
 
@@ -171,6 +172,50 @@ def update_auth():
         update_auth_in_file(username, protocol, auth_type, allow_ip)
 
     return jsonify(message='User configuration updated successfully'), 200
+
+@app.route('/admin/update_user', methods=['PATCH'])
+def update_user():
+    data = request.json
+    old_username = data.get('old_username')
+    new_username = data.get('new_username')
+    new_password = data.get('new_password')
+    
+    # Проверка наличия необходимых данных
+    if not old_username or not new_username or not new_password:
+        return jsonify(message="Required data missing"), 400
+
+    # Проверка на существование пользователя
+    if not user_exists(old_username):
+        return jsonify(message=f"User {old_username} does not exist"), 404
+
+    # Обновление записи пользователя в ACL
+    with open(ACL_PATH, 'r') as file:
+        users = file.readlines()
+
+    updated_users = []
+    for user in users:
+        if user.startswith(f"{old_username}:"):
+            updated_users.append(new_username + ":CL:" + new_password + "\n")
+        else:
+            updated_users.append(user)
+    
+    with open(ACL_PATH, 'w') as file:
+        file.writelines(updated_users)
+
+    # Обновление конфигурации 3proxy
+    with open(CONFIG_PATH, 'r') as file:
+        config = file.read()
+
+    config = config.replace(f"#start http {old_username}", f"#start http {new_username}")
+    config = config.replace(f"#end http {old_username}", f"#end http {new_username}")
+    config = config.replace(f"#start socks {old_username}", f"#start socks {new_username}")
+    config = config.replace(f"#end socks {old_username}", f"#end socks {new_username}")
+    config = config.replace(f"allow {old_username}", f"allow {new_username}")
+
+    with open(CONFIG_PATH, 'w') as file:
+        file.write(config)
+
+    return jsonify(message=f"User {old_username} updated successfully"), 200
 
 @app.route('/admin/change_device', methods=['PATCH'])
 def change_device():
