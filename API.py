@@ -33,7 +33,10 @@ CONFIG_PATH = '/etc/3proxy/3proxy.cfg'
 def adb_reboot_device(serial_number):
     adb_reboot = f"adb -s {serial_number} reboot"
     print(f"Executing adb command: {adb_reboot}")
-    subprocess.Popen(adb_reboot.split(), stdout=subprocess.PIPE)
+    
+    result = subprocess.run(adb_reboot.split(), stdout=subprocess.PIPE)
+    # Если вы хотите выводить результат в консоль:
+    print(result.stdout.decode())
 
 def check_reboot_status(serial_number):
     adb_get_boot_completed = f"adb -s {serial_number} shell getprop sys.boot_completed"
@@ -333,16 +336,16 @@ class UpdateUser(Resource):
         with open(CONFIG_PATH, 'r') as file:
             config = file.read()
 
-    config = config.replace(f"#start http {old_username}", f"#start http {new_username}")
-    config = config.replace(f"#end http {old_username}", f"#end http {new_username}")
-    config = config.replace(f"#start socks {old_username}", f"#start socks {new_username}")
-    config = config.replace(f"#end socks {old_username}", f"#end socks {new_username}")
-    config = config.replace(f"allow {old_username}", f"allow {new_username}")
+        config = config.replace(f"#start http {old_username}", f"#start http {new_username}")
+        config = config.replace(f"#end http {old_username}", f"#end http {new_username}")
+        config = config.replace(f"#start socks {old_username}", f"#start socks {new_username}")
+        config = config.replace(f"#end socks {old_username}", f"#end socks {new_username}")
+        config = config.replace(f"allow {old_username}", f"allow {new_username}")
 
-    with open(CONFIG_PATH, 'w') as file:
-        file.write(config)
+        with open(CONFIG_PATH, 'w') as file:
+            file.write(config)
 
-    return jsonify(message=f"User {old_username} updated successfully"), 200
+        return jsonify(message=f"User {old_username} updated successfully"), 200
 
 class ChangeDevice(Resource):
     def patch(self):
