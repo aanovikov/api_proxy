@@ -258,11 +258,11 @@ class AddUser(Resource):
         username = data['username']
         
         if user_exists(username):
-            return jsonify(message=f'User with username {username} already exists'), 400
+            return {"message": f"User with username {username} already exists"}, 400
 
         add_user_to_acl(username, data['password'])
         add_user_config(username, data['parent_ip'], data['http_port'], data['socks_port'])
-        return jsonify(message='User added successfully'), 201
+        return {"message": "User added successfully"}, 201
 
 class DeleteUser(Resource):
     def delete(self):
@@ -270,11 +270,11 @@ class DeleteUser(Resource):
     
         # Check if user exists
         if not user_exists(username):
-            return jsonify(message='User does not exist'), 404
+            return {"message": "User does not exist"}, 404
 
         remove_user_from_acl(username)
         remove_user_config(username)
-        return jsonify(message='User deleted successfully'), 200
+        return {"message": "User deleted successfully"}, 200
 
 class UpdateAuth(Resource):
     def patch(self):
@@ -287,13 +287,13 @@ class UpdateAuth(Resource):
             allow_ip = username
         elif auth_type == "iponly":
             if 'allow_ip' not in data:
-                return jsonify(message='allow_ip required for iponly auth_type'), 400
+                return {"message": "allow_ip required for iponly auth_type"}, 400
             allow_ip = data['allow_ip']
         else:
-            return jsonify(message='Invalid auth_type provided'), 400
+            return {"message": "Invalid auth_type provided"}, 400
 
         if protocol not in ['http', 'socks', 'both']:
-            return jsonify(message='Invalid protocol provided'), 400
+            return {"message": "Invalid protocol provided"}, 400
 
         if protocol == 'both':
             update_auth_in_file(username, 'http', auth_type, allow_ip)
@@ -301,7 +301,7 @@ class UpdateAuth(Resource):
         else:
             update_auth_in_file(username, protocol, auth_type, allow_ip)
 
-        return jsonify(message='User configuration updated successfully'), 200
+        return {"message": "User configuration updated successfully"}, 200
 
 class UpdateUser(Resource):
     def patch(self):
@@ -310,15 +310,15 @@ class UpdateUser(Resource):
         new_username = data.get('new_username')
         new_password = data.get('new_password')
         
-        # Проверка наличия необходимых данных
+        # Checking for required data
         if not old_username or not new_username or not new_password:
-            return jsonify(message="Required data missing"), 400
+            return {"message": "Required data missing"}, 400
 
-        # Проверка на существование пользователя
+        # Check for user existence
         if not user_exists(old_username):
-            return jsonify(message=f"User {old_username} does not exist"), 404
+            return {"message": f"User {old_username} does not exist"}, 404
 
-        # Обновление записи пользователя в ACL
+        # Update user record in ACL
         with open(ACL_PATH, 'r') as file:
             users = file.readlines()
 
@@ -332,7 +332,7 @@ class UpdateUser(Resource):
         with open(ACL_PATH, 'w') as file:
             file.writelines(updated_users)
 
-        # Обновление конфигурации 3proxy
+        # Update 3proxy configuration
         with open(CONFIG_PATH, 'r') as file:
             config = file.read()
 
@@ -345,7 +345,7 @@ class UpdateUser(Resource):
         with open(CONFIG_PATH, 'w') as file:
             file.write(config)
 
-        return jsonify(message=f"User {old_username} updated successfully"), 200
+        return {"message": f"User {old_username} updated successfully"}, 200
 
 class ChangeDevice(Resource):
     def patch(self):
@@ -354,10 +354,10 @@ class ChangeDevice(Resource):
         new_ip = data['new_ip']
         
         if not ip_exists_in_config(old_ip):
-            return jsonify(message=f'IP address {old_ip} not found in config'), 404
+            return {"message": f"IP address {old_ip} not found in config"}, 404
 
         change_device_in_config(old_ip, new_ip)
-        return jsonify(message='IP address updated successfully'), 200
+        return {"message": "IP address updated successfully"}, 200
 
 #resources
 api.add_resource(Reboot, '/api/reboot/<string:serial_number>')
