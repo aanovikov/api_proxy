@@ -28,14 +28,13 @@ api = Api(app)
 ACL_PATH = '/etc/3proxy/users.txt'
 CONFIG_PATH = '/etc/3proxy/3proxy.cfg'
 
-# Device apiment:
+# Device api manage:
 
 def adb_reboot_device(serial_number):
     adb_reboot = f"adb -s {serial_number} reboot"
     print(f"Executing adb command: {adb_reboot}")
     
     result = subprocess.run(adb_reboot.split(), stdout=subprocess.PIPE)
-    # Если вы хотите выводить результат в консоль:
     print(result.stdout.decode())
 
 def check_reboot_status(serial_number):
@@ -51,7 +50,32 @@ def check_reboot_status(serial_number):
     except subprocess.CalledProcessError:
         return 'Reboot in progress'
 
-#Device apiment functions end;
+def adb_modem_on(serial_number):
+    adb_modem_on = f"adb -s {serial_number} shell svc usb setFunctions rndis"
+    print(f"Executing adb command: {adb_modem_on}")
+    
+    result = subprocess.run(adb_modem_on.split(), stdout=subprocess.PIPE)
+    print(result.stdout.decode())
+
+def adb_modem_off(serial_number):
+    adb_modem_off = f"adb -s {serial_number} shell svc usb setFunctions none"
+    print(f"Executing adb command: {adb_modem_off}")
+    
+    result = subprocess.run(adb_modem_off.split(), stdout=subprocess.PIPE)
+    print(result.stdout.decode())
+
+def adb_modem_status(serial_number):
+    adb_modem_status_cmd = f"adb -s {serial_number} shell svc usb getFunctions"
+    print(f"Executing adb command: {adb_modem_status_cmd}")
+    result = subprocess.run(adb_modem_status_cmd.split(), stderr=subprocess.PIPE)
+    error = result.stderr.decode()
+
+    if "rndis" in error:
+        return "rndis"
+    else:
+        return "rndis_off"
+
+#Device api manage functions end;
 
 #3Proxy config apiment:
 
@@ -359,6 +383,35 @@ class ChangeDevice(Resource):
         change_device_in_config(old_ip, new_ip)
         return {"message": "IP address updated successfully"}, 200
 
+class ModemToggle(Resource):
+    def post(self):
+        data = request.json
+        serial_number = data['serial_number']
+        action = data['action']  # This should be either 'on' or 'off'
+        
+        if action == "on":
+            try:
+                adb_modem_on(serial_number)
+                return {"message": "Modem turned on successfully"}, 200
+            except Exception as e:
+                return {"message": str(e)}, 500
+        elif action == "off":
+            try:
+                adb_modem_off(serial_number)
+                return {"message": "Modem turned off successfully"}, 200
+            except Exception as e:
+                return {"message": str(e)}, 500
+        else:
+            return {"message": "Invalid action provided. Use 'on' or 'off'."}, 400
+
+class ModemStatus(Resource):
+    def get(self, serial_number):
+        try:
+            status = adb_modem_status(serial_number)
+            return {"message": status}, 200
+        except Exception as e:
+            return {"message": str(e)}, 500
+
 #resources
 api.add_resource(Reboot, '/api/reboot/<string:serial_number>')
 api.add_resource(RebootStatus, '/api/rebootstatus/<string:serial_number>')
@@ -369,6 +422,8 @@ api.add_resource(DeleteUser, '/api/delete_user')
 api.add_resource(UpdateAuth, '/api/update_auth')
 api.add_resource(UpdateUser, '/api/update_user')
 api.add_resource(ChangeDevice, '/api/change_device')
+api.add_resource(ModemToggle, '/api/modem')
+api.add_resource(ModemStatus, '/api/modemstatus/<string:serial_number>')
 
 if __name__ == '__main__':
     app.run(debug=True)
