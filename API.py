@@ -9,6 +9,8 @@ from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 import datetime
 from threading import Lock
 import textwrap
+import mysql.connector
+from cryptography.fernet import Fernet
 
 config_lock = Lock()
 
@@ -50,24 +52,44 @@ def check_reboot_status(serial_number):
     except subprocess.CalledProcessError:
         return 'Reboot in progress'
 
-def adb_modem_on(serial_number):
-    adb_modem_on = f"adb -s {serial_number} shell svc usb setFunctions rndis"
-    print(f"Executing adb command: {adb_modem_on}")
+#for alcatel
+def modem_on_alcatel(serial_number):
+    modem_on_alcatel = f"adb -s {serial_number} shell svc usb setFunctions rndis"
+    print(f"Executing adb command: {modem_on_alcatel}")
     
-    result = subprocess.run(adb_modem_on.split(), stdout=subprocess.PIPE)
+    result = subprocess.run(modem_on_alcatel.split(), stdout=subprocess.PIPE)
     print(result.stdout.decode())
 
-def adb_modem_off(serial_number):
-    adb_modem_off = f"adb -s {serial_number} shell svc usb setFunctions none"
-    print(f"Executing adb command: {adb_modem_off}")
+def modem_off_alcatel(serial_number):
+    modem_off_alcatel = f"adb -s {serial_number} shell svc usb setFunctions none"
+    print(f"Executing adb command: {modem_off_alcatel}")
     
-    result = subprocess.run(adb_modem_off.split(), stdout=subprocess.PIPE)
+    result = subprocess.run(modem_off_alcatel.split(), stdout=subprocess.PIPE)
     print(result.stdout.decode())
 
-def adb_modem_status(serial_number):
-    adb_modem_status_cmd = f"adb -s {serial_number} shell svc usb getFunctions"
-    print(f"Executing adb command: {adb_modem_status_cmd}")
-    result = subprocess.run(adb_modem_status_cmd.split(), stderr=subprocess.PIPE)
+def modem_status_alcatel(serial_number):
+    modem_status_alcatel_cmd = f"adb -s {serial_number} shell svc usb getFunctions"
+    print(f"Executing adb command: {modem_status_alcatel_cmd}")
+    result = subprocess.run(modem_status_alcatel_cmd.split(), stderr=subprocess.PIPE)
+    error = result.stderr.decode()
+
+    if "rndis" in error:
+        return "rndis"
+    else:
+        return "rndis_off"
+
+#for samsung
+def modem_a2(serial_number):
+    modem_a2 = f"adb -s {serial_number} shell 'input keyevent KEYCODE_WAKEUP && am start -n com.android.settings/.TetherSettings && sleep 1 && input tap 465 545'"
+    print(f"Executing adb command: {modem_a2}")
+    
+    result = subprocess.run(modem_a2.split(), stdout=subprocess.PIPE)
+    print(result.stdout.decode())
+
+def modem_status_samsung(serial_number):
+    modem_status_samsung_cmd = f"adb -s {serial_number} shell svc usb getFunction"
+    print(f"Executing adb command: {modem_status_samsung_cmd}")
+    result = subprocess.run(modem_status_samsung_cmd.split(), stderr=subprocess.PIPE)
     error = result.stderr.decode()
 
     if "rndis" in error:
@@ -97,7 +119,7 @@ def add_user_config(username, parent_ip, http_port, socks_port):
         flush
         auth strong
         allow {username}
-        #parent 1000 http {parent_ip} 8080 android android
+        parent 1000 http {parent_ip} 8080 android android
         proxy -n -a -p{http_port}
         #end http {username}
 
@@ -105,7 +127,7 @@ def add_user_config(username, parent_ip, http_port, socks_port):
         flush
         auth strong
         allow {username}
-        #parent 1000 socks5 {parent_ip} 1080 android android
+        parent 1000 socks5 {parent_ip} 1080 android android
         socks -n -a -p{socks_port}
         #end socks {username}
     """)
@@ -391,13 +413,13 @@ class ModemToggle(Resource):
         
         if action == "on":
             try:
-                adb_modem_on(serial_number)
+                modem_on_alcatel(serial_number)
                 return {"message": "Modem turned on successfully"}, 200
             except Exception as e:
                 return {"message": str(e)}, 500
         elif action == "off":
             try:
-                adb_modem_off(serial_number)
+                modem_off_alcatel(serial_number)
                 return {"message": "Modem turned off successfully"}, 200
             except Exception as e:
                 return {"message": str(e)}, 500
@@ -407,10 +429,46 @@ class ModemToggle(Resource):
 class ModemStatus(Resource):
     def get(self, serial_number):
         try:
-            status = adb_modem_status(serial_number)
+            status = modem_status_samsung(serial_number)
             return {"message": status}, 200
         except Exception as e:
             return {"message": str(e)}, 500
+
+class ProxyCount(Resource):
+    def get(self):
+        # Connect to the MySQL database
+        connection = mysql.connector.connect(
+            host="10.66.66.8",
+            user="opz",
+            password="Qwerty1@3",
+            database="testbase"
+        )
+
+        #db = mysql.connector.connect(host=host, user=user, password=password, database=database)
+        #cursor = db.cursor()
+        cursor = connection.cursor(dictionary=True)
+
+        try:
+            sql = """
+            SELECT 
+                provider,
+                COUNT(*) AS count
+            FROM 
+                testbase.proxy
+            WHERE 
+                use_status = 0
+            GROUP BY 
+                provider;
+            """
+            cursor.execute(sql)
+            results = cursor.fetchall() #sql_query
+            return results, 200  # Return the results and a 200 OK status code
+        except Exception as e:
+            return {"error": str(e)}, 500  # Return the error message and a 500 Internal Server Error status code
+        finally:
+            cursor.close()
+            connection.close()
+
 
 #resources
 api.add_resource(Reboot, '/api/reboot/<string:serial_number>')
@@ -424,6 +482,7 @@ api.add_resource(UpdateUser, '/api/update_user')
 api.add_resource(ChangeDevice, '/api/change_device')
 api.add_resource(ModemToggle, '/api/modem')
 api.add_resource(ModemStatus, '/api/modemstatus/<string:serial_number>')
+api.add_resource(ProxyCount, '/api/proxycount')
 
 if __name__ == '__main__':
     app.run(debug=True)
