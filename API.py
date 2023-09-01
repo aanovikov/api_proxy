@@ -4,17 +4,28 @@ from flask_restful import reqparse
 import pexpect
 import time
 import subprocess
+import os
 from subprocess import Popen, PIPE, TimeoutExpired, run
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 import datetime
 from threading import Lock
 import textwrap
+from textwrap import dedent
+from functools import wraps
 import mysql.connector
-from cryptography.fernet import Fernet
+import secrets
+import base64
 import netifaces as ni
+import re
+import redis
+from redis.exceptions import ResponseError
+import traceback
+import logging
 
 config_lock = Lock()
+
+logging.basicConfig(level=logging.INFO)
 
 parser = reqparse.RequestParser()
 parser.add_argument('interval_minutes')
@@ -32,14 +43,25 @@ api = Api(app)
 ACL_PATH = '/etc/3proxy/users.txt'
 CONFIG_PATH = '/etc/3proxy/3proxy.cfg'
 
+REDIS_HOST = os.environ['REDIS_HOST']
+REDIS_PORT = int(os.environ['REDIS_PORT'])
+REDIS_PASSWORD = os.environ['REDIS_PASSWORD']
+
+MYSQL_SETTINGS = {
+    "host": os.environ['MYSQL_HOST'],
+    "user": os.environ['MYSQL_USER'],
+    "password": os.environ['MYSQL_PASSWORD'],
+    "database": os.environ['MYSQL_DATABASE']
+}
+
 # Device api manage:
 
 def adb_reboot_device(serial_number):
     adb_reboot = f"adb -s {serial_number} reboot"
-    print(f"Executing adb command: {adb_reboot}")
+    logging.info(f"Executing adb command: {adb_reboot}")
     
     result = subprocess.run(adb_reboot.split(), stdout=subprocess.PIPE)
-    print(result.stdout.decode())
+    logging.info(result.stdout.decode())
 
 def check_reboot_status(serial_number):
     adb_get_boot_completed = f"adb -s {serial_number} shell getprop sys.boot_completed"
@@ -76,21 +98,21 @@ def wait_for_ip(interface_name, retries=5, delay=2):
 #for alcatel
 def modem_on_alcatel(serial_number):
     modem_on_alcatel = f"adb -s {serial_number} shell svc usb setFunctions rndis"
-    print(f"Executing adb command: {modem_on_alcatel}")
+    logging.info(f"Executing adb command: {modem_on_alcatel}")
     
     result = subprocess.run(modem_on_alcatel.split(), stdout=subprocess.PIPE)
-    print(result.stdout.decode())
+    logging.info(result.stdout.decode())
 
 def modem_off_alcatel(serial_number):
     modem_off_alcatel = f"adb -s {serial_number} shell svc usb setFunctions none"
-    print(f"Executing adb command: {modem_off_alcatel}")
+    logging.info(f"Executing adb command: {modem_off_alcatel}")
     
     result = subprocess.run(modem_off_alcatel.split(), stdout=subprocess.PIPE)
-    print(result.stdout.decode())
+    logging.info(result.stdout.decode())
 
 def modem_status_alcatel(serial_number):
     modem_status_alcatel_cmd = f"adb -s {serial_number} shell svc usb getFunctions"
-    print(f"Executing adb command: {modem_status_alcatel_cmd}")
+    logging.info(f"Executing adb command: {modem_status_alcatel_cmd}")
     
     process = Popen(modem_status_alcatel_cmd.split(), stdout=PIPE, stderr=PIPE)
     try:
@@ -110,16 +132,16 @@ def modem_status_alcatel(serial_number):
 #for samsung
 def modem_a2(serial_number):
     modem_a2 = f"adb -s {serial_number} shell 'input keyevent KEYCODE_WAKEUP && am start -n com.android.settings/.TetherSettings && sleep 1 && input tap 465 545'"
-    print(f"Executing adb command: {modem_a2}")
+    logging.info(f"Executing adb command: {modem_a2}")
 
     result = subprocess.run(modem_a2, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    print(result.stdout.decode())
-    print(result.stderr.decode())
+    logging.info(result.stdout.decode())
+    logging.info(result.stderr.decode())
 
 def modem_status_a2(serial_number):
     modem_status_a2_cmd = f"adb -s {serial_number} shell svc usb getFunction"
-    print(f"Executing adb command: {modem_status_a2_cmd}")
+    logging.info(f"Executing adb command: {modem_status_a2_cmd}")
     
     process = Popen(modem_status_a2_cmd.split(), stdout=PIPE, stderr=PIPE)
     try:
@@ -154,97 +176,151 @@ MODEM_HANDLERS = {
 #3Proxy config apiment:
 
 def add_user_to_acl(username, password):
-    with open(ACL_PATH, 'a') as file:
-        file.write(f"{username}:CL:{password}\n")
+    try:
+        with open(ACL_PATH, 'a') as file:
+            file.write(f"{username}:CL:{password}\n")
+        return True
+    except Exception as e:
+        logging.error(f"Failed to add user {username} to ACL: {str(e)}")
+        return False
 
 def remove_user_from_acl(username):
-    with open(ACL_PATH, 'r') as file:
-        lines = file.readlines()
-    with open(ACL_PATH, 'w') as file:
-        for line in lines:
-            if username not in line:
-                file.write(line)
+    try:
+        with open(ACL_PATH, 'r') as file:
+            lines = file.readlines()
+
+        user_removed = False
+        with open(ACL_PATH, 'w') as file:
+            for line in lines:
+                if username not in line:
+                    file.write(line)
+                else:
+                    user_removed = True
+
+        if user_removed:
+            logging.info(f"User {username} successfully removed from ACL")
+            return True
+        else:
+            logging.warning(f"User {username} not found in ACL")
+            return False
+
+    except Exception as e:
+        logging.error(f"An error occurred while removing user {username} from ACL: {str(e)}")
+        return False
 
 def write_config_to_file(config):
-    with open(CONFIG_PATH, 'a+') as file:
-        file.seek(0)
-        content = file.read()
-        if content and not content.endswith('\n'):
-            file.write('\n')
-        file.write(config)
+    try:
+        with open(CONFIG_PATH, 'a+') as file:
+            file.seek(0)
+            content = file.read()
+            if content and not content.endswith('\n'):
+                file.write('\n')
+            file.write(config)
+        return True
+    except Exception as e:
+        logging.error(f"Failed to write config to file: {str(e)}")
+        return False
 
-def add_user_config(username, mode, parent_ip, ext_ip, http_port, socks_port):
-    config_parts = []
+def add_user_config(username, mode, parent_ip, ext_ip, http_port, socks_port, id=None):
+    try:
+        config_parts = []
 
-    # Common parts for HTTP and SOCKS
-    auth_part = "auth strong"
-    allow_part = f"allow {username}"
+        # Common parts for http and socks
+        auth_part = "auth strong"
+        allow_part = f"allow {username}"
 
-    # Mode and IP-specific parts
-    if mode == "parent" and parent_ip != "none":
-        parent_http = f"parent 1000 http {parent_ip} 8080 android android"
-        parent_socks = f"parent 1000 socks5 {parent_ip} 1080 android android"
-    elif mode == "modem" and parent_ip == "none":
-        parent_http = None
-        parent_socks = None
-    else:
-        raise ValueError("Invalid combination of mode, parent_ip, and ext_ip")
+        # Mode and IP-specific parts
+        if mode == "parent" and parent_ip != "none":
+            parent_http = f"parent 1000 http {parent_ip} 8080 android android"
+            parent_socks = f"parent 1000 socks5 {parent_ip} 1080 android android"
+        elif mode == "modem" and parent_ip == "none":
+            parent_http = None
+            parent_socks = None
+        else:
+            raise ValueError("Invalid combination of mode and parent_ip")
 
-    proxy = f"proxy -n -a -p{http_port}" if ext_ip == "none" else f"proxy -n -a -p{http_port} -e{ext_ip}"
-    socks = f"socks -n -a -p{socks_port}" if ext_ip == "none" else f"socks -n -a -p{socks_port} -e{ext_ip}"
+        # Generate proxy and socks strings based on mode and ext_ip
+        if mode == "modem" and id:
+            ext_ip_path = f'"/etc/3proxy/modem_ip/{id}"'  # Notice the quotes around the path
+            proxy = f"proxy -n -a -p{http_port} -e${ext_ip_path}"
+            socks = f"socks -n -a -p{socks_port} -e${ext_ip_path}"
+        else:
+            proxy = f"proxy -n -a -p{http_port}" if ext_ip == "none" else f"proxy -n -a -p{http_port} -e{ext_ip}"
+            socks = f"socks -n -a -p{socks_port}" if ext_ip == "none" else f"socks -n -a -p{socks_port} -e{ext_ip}"
 
-    # Construct the HTTP and SOCKS parts
-    http_parts = [
-        f"# Start HTTP for {username}", 
-        "flush", 
-        auth_part, 
-        allow_part, 
-        parent_http, 
-        proxy, 
-        f"# End HTTP for {username}"
-    ]
-    socks_parts = [
-        f"# Start SOCKS for {username}", 
-        "flush", 
-        auth_part, 
-        allow_part, 
-        parent_socks, 
-        socks, 
-        f"# End SOCKS for {username}"
-    ]
+        # Construct the HTTP and SOCKS parts
+        http_parts = [
+            f"# Start http for {username}",
+            "flush",
+            auth_part,
+            allow_part,
+            parent_http,
+            proxy,
+            f"# End http for {username}"
+        ]
+        socks_parts = [
+            f"# Start socks for {username}",
+            "flush",
+            auth_part,
+            allow_part,
+            parent_socks,
+            socks,
+            f"# End socks for {username}"
+        ]
 
-    # Remove any None values
-    http_parts = [part for part in http_parts if part is not None]
-    socks_parts = [part for part in socks_parts if part is not None]
+        # Remove any None values
+        http_parts = [part for part in http_parts if part is not None]
+        socks_parts = [part for part in socks_parts if part is not None]
 
-    # Join the parts together, adding a newline only at the end
-    config = "\n".join(http_parts + socks_parts) + "\n"
-    write_config_to_file(config)
+        # Join the parts together, adding a newline only at the end
+        config = "\n".join(http_parts + socks_parts) + "\n"
+        write_result = write_config_to_file(config)
+        if not write_result:
+            raise Exception("Failed to write user config to file.")
+            
+        return True
+    except Exception as e:
+        logging.error(f"Failed to add user config: {str(e)}")
+        return False
 
 def remove_user_config(username):
-    with open(CONFIG_PATH, 'r') as file:
-        lines = file.readlines()
+    try:
+        with open(CONFIG_PATH, 'r') as file:
+            lines = file.readlines()
 
-    start_http_tag = f"# Start HTTP for {username}"
-    end_http_tag = f"# End HTTP for {username}"
+        user_removed = False
+        new_config = []
+        start_http_tag = f"# Start http for {username}"
+        end_http_tag = f"# End http for {username}"
+        start_socks_tag = f"# Start socks for {username}"
+        end_socks_tag = f"# End socks for {username}"
 
-    start_socks_tag = f"# Start SOCKS for {username}"
-    end_socks_tag = f"# End SOCKS for {username}"
+        skip = False
+        for line in lines:
+            stripped_line = line.strip()  # Remove whitespace characters
+            if stripped_line == start_http_tag or stripped_line == start_socks_tag:
+                skip = True
+                user_removed = True
+            elif stripped_line == end_http_tag or stripped_line == end_socks_tag:
+                skip = False
+                continue  # Skip the line for the end tag as well
 
-    skip = False
-    new_config = []
-    for line in lines:
-        stripped_line = line.strip()  # Remove whitespace characters
-        if stripped_line == start_http_tag or stripped_line == start_socks_tag:
-            skip = True
-        elif stripped_line == end_http_tag or stripped_line == end_socks_tag:
-            skip = False
-            continue  # Skip the line for the end tag as well
-        if not skip and stripped_line:  # Check if the line is not empty after stripping whitespace
-            new_config.append(line)
+            if not skip and stripped_line:  # Check if the line is not empty after stripping whitespace
+                new_config.append(line)
 
-    with open(CONFIG_PATH, 'w') as file:
-        file.writelines(new_config)
+        with open(CONFIG_PATH, 'w') as file:
+            file.writelines(new_config)
+
+        if user_removed:
+            logging.info(f"User {username} successfully removed from config")
+            return True
+        else:
+            logging.warning(f"User {username} not found in config")
+            return False
+
+    except Exception as e:
+        logging.error(f"An error occurred while removing user {username} from config: {str(e)}")
+        return False
 
 def user_exists(username):
     with open(ACL_PATH, 'r') as file:
@@ -254,6 +330,37 @@ def user_exists(username):
             if len(parts) > 0 and parts[0] == username: # если первая часть строки точно соответствует имени пользователя
                 return True
     return False
+
+def update_auth_in_file(username, protocol, auth_type, allow_ip):
+    with open(CONFIG_PATH, 'r') as file:
+        lines = file.readlines()
+
+    start_tag = f"# Start {protocol} for {username}"
+    end_tag = f"# End {protocol} for {username}"
+
+    within_block = False
+    new_config = []
+
+    for line in lines:
+        stripped_line = line.strip()
+        if start_tag in stripped_line:
+            within_block = True
+        elif end_tag in stripped_line:
+            within_block = False
+
+        if within_block:
+            if "auth" in line:
+                line = f"auth {auth_type}\n"
+            elif "allow" in line:
+                if auth_type == "strong":
+                    line = f"allow {username}\n"
+                elif auth_type == "iponly":
+                    line = f"allow * {allow_ip}\n"
+        
+        new_config.append(line)
+
+    with open(CONFIG_PATH, 'w') as file:
+        file.writelines(new_config)
 
 def ip_exists_in_config(ip_address):
     with open(CONFIG_PATH, 'r') as file:
@@ -269,44 +376,244 @@ def change_device_in_config(old_ip, new_ip):
     with open(CONFIG_PATH, 'w') as file:
         file.write(updated_content)
 
+def id_exists_in_config(id):
+    with open(CONFIG_PATH, 'r') as file:
+        content = file.read()
+        # Ищем строку вида -e$"/etc/3proxy/modem_ip/{id}"
+        return f'-e$"/etc/3proxy/modem_ip/{id}"' in content
+
+def change_id_in_config(old_id, new_id):
+    with open(CONFIG_PATH, 'r') as file:
+        content = file.read()
+
+    # Заменяем строку вида -e$"/etc/3proxy/modem_ip/{old_id}" на новую
+    updated_content = content.replace(f'-e$"/etc/3proxy/modem_ip/{old_id}"', f'-e$"/etc/3proxy/modem_ip/{new_id}"')
+
+    with open(CONFIG_PATH, 'w') as file:
+        file.write(updated_content)
+
+def write_modem_ip(ext_ip, id):
+    # Define the directory and cross-platform file path
+    directory = os.path.join("/etc", "3proxy", "modem_ip")
+    file_path = os.path.join(directory, id)
+
+    # Check if the directory exists
+    if not os.path.exists(directory):
+        logging.error(f"Directory {directory} does not exist.")
+        return False
+
+    # Command to write the ext_ip to the file
+    shell_command = dedent(f"""
+        echo {ext_ip} > {file_path}
+    """).strip()
+
+    try:
+        if os.name == 'nt':  # For Windows
+            subprocess.run(shell_command, shell=True, check=True)
+        else:  # For Linux and macOS
+            subprocess.run(['bash', '-c', shell_command], check=True)
+        logging.info(f"Successfully written {ext_ip} to {file_path}")
+        return True
+    except subprocess.CalledProcessError as e:
+        logging.error(f"An error occurred while writing to {file_path}: {e}")
+        return False
+
+def generate_short_token():
+    random_bytes = secrets.token_bytes(15)  # 15 bytes should generate a 20-character token when base64 encoded
+    token = base64.urlsafe_b64encode(random_bytes).decode('utf-8')
+    return token
+
+def connect_to_mysql():
+    try:
+        connection = mysql.connector.connect(**MYSQL_SETTINGS)
+        if connection.is_connected():
+            return connection
+    except Exception as e:
+        logging.error(f"Failed to connect to MySQL: {str(e)}")
+        return None
+
+def connect_to_redis():
+    try:
+        r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, password=REDIS_PASSWORD)
+        r.ping()
+        return r
+    except redis.ConnectionError:
+        logging.error("Failed to connect to Redis. Aborting operation.")
+        return None
+
+def store_to_redis(data, token):
+    try:
+        r = connect_to_redis()
+        if r is None:
+            logging.error("Failed to connect to Redis. Aborting operation.")
+            return False
+
+        if not r.hset(token, mapping=data):
+            logging.error(f"Failed to store data for token {token}")
+            return False
+        
+        return True
+        
+    except redis.ConnectionError:
+        logging.error("Could not connect to Redis")
+        return False
+    except redis.TimeoutError:
+        logging.error("Redis operation timed out")
+        return False
+    except Exception as e:
+        logging.error(f"An unknown error occurred while communicating with Redis: {e}")
+        return False
+
+def get_data_from_redis(token):
+    r = connect_to_redis()
+    all_values = r.hgetall(token)
+    if not all_values:
+        logging.error(f"No data found for token {token}")
+        raise Exception("No data found in Redis")
+    return {k.decode('utf-8'): v.decode('utf-8') for k, v in all_values.items()}
+
+def delete_from_redis(token):
+    try:
+        logging.info(f"Deleting token: {token} from Redis")
+
+        r = connect_to_redis()
+
+        # Удаление записи по ключу
+        result = r.delete(token)
+
+        if result == 1:
+            logging.info(f"The key {token} has been deleted successfully.")
+            return True
+        else:
+            logging.warning(f"The key {token} does not exist.")
+            return False
+
+    except Exception as e:
+        logging.error(f"An error occurred during Redis token deletion: {str(e)}")
+        return False
+
+def requires_role(required_role):
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            token = kwargs.pop('token', None)
+
+            r = connect_to_redis()
+            if token is None:
+                logging.error("Token is missing in the request.")
+                return {"message": "Unauthorized"}, 401
+            
+            # Проверка типа ключа в Redis
+            key_type = r.type(token).decode('utf-8')
+            if key_type != 'hash':
+                logging.error(f"Token is of invalid type: {key_type}. Expected 'hash'.")
+                return {"message": "Invalid token type"}, 400
+
+            role_data = r.hget(token, "role")
+            if role_data is None:
+                logging.error(f"No role found for token {token}")
+                return {"message": "Unauthorized"}, 401
+            
+            role = role_data.decode('utf-8')  # Декодирование может быть необходимым
+            if role != required_role:
+                logging.warning(f"Permission denied: role {role} does not have access")
+                return {"message": "Permission denied"}, 403
+            
+            kwargs['admin_token'] = token  # Re-insert the token
+            return f(*args, **kwargs)
+        return decorated_function
+    return decorator
+
+def serial_exists(target_serial):
+    try:
+        r = connect_to_redis()
+        if r is None:
+            logging.error("Failed to connect to Redis. Aborting operation.")
+            return False
+        
+        for key in r.scan_iter("*"):  # Replace "*" with a more specific pattern if applicable
+            user_data = r.hgetall(key)
+            if not user_data:
+                continue
+            
+            user_data_decoded = {k.decode('utf-8'): v.decode('utf-8') for k, v in user_data.items()}
+            serial_number = user_data_decoded.get('serial')
+
+            if serial_number == target_serial:
+                return True
+                
+        return False
+
+    except redis.ConnectionError:
+        logging.error("Could not connect to Redis")
+        return False
+    except redis.TimeoutError:
+        logging.error("Redis operation timed out")
+        return False
+    except Exception as e:
+        logging.error(f"An unknown error occurred while communicating with Redis: {e}")
+        return False
+
 #3Proxy config apiment end;
 
 class Reboot(Resource):
-    def get(self, serial_number):
-        print(f"Received serial number: {serial_number}")
+    #@requires_role("user")
+    def get(self, token):
+        user_data = get_data_from_redis(token)
+        serial_number = user_data.get('serial')
+
+        if not serial_number:
+            return {'error': 'Serial number not found'}, 400
+
+        logging.info(f"Received serial number: {serial_number}")
         adb_reboot_device(serial_number)
         return {'reboot': 'in progress', 'message': 'Reboot command sent.'}, 202
 
 class RebootStatus(Resource):
-    def get(self, serial_number):
+    #@requires_role("user")
+    def get(self, token):
+        user_data = get_data_from_redis(token)
+        serial_number = user_data.get('serial')
+
+        if not serial_number:
+            return {'error': 'Serial number not found'}, 400
+
         status = check_reboot_status(serial_number)
+
         if status == 'OK':
             return {'status': 'OK', 'message': 'Device is ready.'}, 200
         else:
             return {'status': 'Reboot in progress', 'message': 'Device not ready.'}, 200
 
 class ChangeIP(Resource):
-    def get(self, serial_number):
-        print(f"Received serial number: {serial_number}") 
+    #@requires_role("user")
+    def get(self, token):
+        user_data = get_data_from_redis(token)
+        serial_number = user_data.get('serial')
+
+        if not serial_number:
+            return {'error': 'Serial number not found'}, 400
+
+        logging.info(f"Received serial number: {serial_number}") 
         adb_command = f"adb -s {serial_number} shell"
-        print(f"Executing adb command: {adb_command}") 
+        logging.info(f"Executing adb command: {adb_command}") 
         
         try:
             child = pexpect.spawn(adb_command)
             child.expect('\$', timeout=10) # Ожидаем символ "$", увеличиваем timeout до 60 секунд
             
             airplane_on = "su -c 'settings put global airplane_mode_on 1; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true'"
-            print(f"Executing airplane command: {airplane_on}") 
+            logging.info(f"Executing airplane command: {airplane_on}") 
             
             child.sendline(airplane_on)
             child.expect_exact('Broadcast completed: result=0', timeout=10) # Используем expect_exact
 
             # Делаем паузу в 1 секунду
-            print("pause 1 second")
+            logging.info("pause 1 second")
             time.sleep(1)
             
             airplane_off = "su -c 'settings put global airplane_mode_on 0; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false'"
-            print(f"Executing airplane command: {airplane_off}")
+            logging.info(f"Executing airplane command: {airplane_off}")
             
             child.sendline(airplane_off)
             child.expect_exact('Broadcast completed: result=0', timeout=10) 
@@ -315,25 +622,33 @@ class ChangeIP(Resource):
             child.sendline('exit')
             child.close()
 
-            return {'status': 'success', 'message': 'Airplane mode activated and then deactivated'}, 200
+            return {'status': 'success', 'message': 'IP was changed'}, 200
 
         except Exception as e:
-            print(f"Error: {str(e)}") 
+            logging.info(f"Error: {str(e)}") 
             return {'status': 'failure', 'message': str(e)}, 500
 
 class AutoChangeIP(Resource):
-    def post(self, serial_number):
+    #@requires_role("user")
+    def post(self, token):
+        user_data = get_data_from_redis(token)
+        serial_number = user_data.get('serial')
+        logging.info(serial_number)
+
+        if not serial_number:
+            return {'error': 'Serial number not found'}, 400
+
         args = parser.parse_args()
         interval_minutes = args['interval_minutes']
 
         # Если interval_minutes равен 'cancel' или 0, отменяем задание
         if interval_minutes == '0':
             try:
-                scheduler.remove_job(serial_number)
-                return {'status': 'success', 'message': f'Scheduled IP changes for device {serial_number} have been cancelled'}, 200
+                scheduler.remove_job(token)
+                return {'status': 'success', 'message': f'Scheduled IP changes for device {token} have been cancelled'}, 200
 
             except Exception as e:
-                print(f"Error: {str(e)}")
+                logging.info(f"Error: {str(e)}")
                 return {'status': 'failure', 'message': str(e)}, 500
 
         # В противном случае, устанавливаем задание
@@ -341,209 +656,400 @@ class AutoChangeIP(Resource):
             interval_minutes = int(interval_minutes)  # конвертируем в int
             try:
                 scheduler.add_job(func=ChangeIP().get, trigger='interval', minutes=interval_minutes, args=[serial_number], id=serial_number)
-                return {'status': 'success', 'message': f'Airplane mode will be activated and then deactivated every {interval_minutes} minutes'}, 200
+                return {'status': 'success', 'message': f'Auto changing IP every {interval_minutes} minutes'}, 200
 
             except Exception as e:
-                print(f"Error: {str(e)}")
+                logging.info(f"Error: {str(e)}")
                 return {'status': 'failure', 'message': str(e)}, 500
 
 class DeleteUser(Resource):
-    def delete(self):
-        username = request.json['username']
-    
-        # Check if user exists
-        if not user_exists(username):
-            return {"message": "User does not exist"}, 404
+    @requires_role("admin")
+    def delete(self, admin_token):
+        try:
+            # Проверка админских прав с помощью токена из URL
+            admin_data = get_data_from_redis(admin_token)
+            if not admin_data or admin_data.get('role') != 'admin':
+                return {"message": "Unauthorized access"}, 401
 
-        remove_user_from_acl(username)
-        remove_user_config(username)
-        return {"message": "User deleted successfully"}, 200
+            # Получение JSON тела
+            data = request.json
+            if data is None:
+                return {"message": "Invalid request: JSON body required"}, 400
+
+            # Получение имени пользователя и токена из JSON тела
+            username = data.get('username')
+            user_token = data.get('token')
+            if not username or not user_token:
+                return {"message": "Missing required fields: username and/or token"}, 400
+
+            # Проверка существования пользователя
+            if not user_exists(username):
+                return {"message": "User does not exist"}, 404
+
+            # Проверка токена и имени пользователя в Redis
+            user_data = get_data_from_redis(user_token)
+            if not user_data or user_data.get('username') != username:
+                return {"message": "Invalid username or token"}, 400
+
+            # Удаление из ACL
+            if not remove_user_from_acl(username):
+                return {"message": "Failed to remove user from ACL"}, 500
+
+            # Удаление из конфигурации
+            if not remove_user_config(username):
+                return {"message": "Failed to remove user from configuration"}, 500
+
+            # Удаление из Redis
+            result = delete_from_redis(user_token)
+            if not result:
+                return {"message": "Token not found in Redis or failed to remove"}, 404
+
+            return {"message": "User deleted successfully"}, 200
+        except Exception as e:
+            logging.error(f"An error occurred: {str(e)}")
+            return {"message": f"An error occurred: {str(e)}"}, 500
 
 class UpdateAuth(Resource):
+    @requires_role("admin")
     def patch(self):
-        data = request.json
-        username = data['username']
-        protocol = data['protocol']  # Should be either 'http', 'socks', or 'both'
-        auth_type = data['auth_type']
-
-        if auth_type == "strong":
-            allow_ip = username
-        elif auth_type == "iponly":
-            if 'allow_ip' not in data:
-                return {"message": "allow_ip required for iponly auth_type"}, 400
-            allow_ip = data['allow_ip']
-        else:
-            return {"message": "Invalid auth_type provided"}, 400
-
-        if protocol not in ['http', 'socks', 'both']:
-            return {"message": "Invalid protocol provided"}, 400
-
-        if protocol == 'both':
-            update_auth_in_file(username, 'http', auth_type, allow_ip)
-            update_auth_in_file(username, 'socks', auth_type, allow_ip)
-        else:
-            update_auth_in_file(username, protocol, auth_type, allow_ip)
-
-        return {"message": "User configuration updated successfully"}, 200
-
-class AddUser(Resource):
-    def post(self):
         try:
             data = request.json
+            if data is None:
+                return {"message": "Invalid request: JSON body required"}, 400
 
-            required_fields = ['username', 'password', 'mode', 'http_port', 'socks_port']
-            if not all(field in data for field in required_fields):
+            username = data.get('username')
+            if not username:
+                return {"message": "Missing required field: username"}, 400
+
+            protocol = data.get('protocol')  # Should be either 'http', 'socks', or 'both'
+            if not protocol:
+                return {"message": "Missing required field: protocol"}, 400
+
+            auth_type = data.get('auth_type')
+            if not auth_type:
+                return {"message": "Missing required field: auth_type"}, 400
+
+            ALLOWED_PROTOCOLS = ['http', 'socks', 'both']
+            if protocol not in ALLOWED_PROTOCOLS:
+                return {"message": "Invalid protocol provided"}, 400
+
+            if auth_type == "strong":
+                allow_ip = username
+            elif auth_type == "iponly":
+                if 'allow_ip' not in data:
+                    return {"message": "allow_ip required for iponly auth_type"}, 400
+                allow_ip = data['allow_ip']
+            else:
+                return {"message": "Invalid auth_type provided"}, 400
+
+            if protocol == 'both':
+                update_auth_in_file(username, 'http', auth_type, allow_ip)
+                update_auth_in_file(username, 'socks', auth_type, allow_ip)
+            else:
+                update_auth_in_file(username, protocol, auth_type, allow_ip)
+
+            return {"message": "User configuration updated successfully"}, 200
+
+        except Exception as e:
+            logging.error(f"An error occurred: {str(e)}")
+            return {"message": f"An error occurred: {str(e)}"}, 500
+
+class AddUser(Resource):
+    @requires_role("admin")
+    def post(self, admin_token):
+        try:
+            # Проверка админских прав с помощью токена из URL
+            admin_data = get_data_from_redis(admin_token)
+            if not admin_data or admin_data.get('role') != 'admin':
+                return {"message": "Unauthorized access"}, 401
+
+            data = request.json
+            if data is None:
+                logging.warning("Invalid request: Missing JSON body")
+                return {"message": "Invalid request: JSON body required"}, 400
+
+            logging.info(f"Received data: {data}")
+
+            required_fields = ['username', 'password', 'mode', 'http_port', 'socks_port', 'serial', 'device']
+            if not all(data.get(field) for field in required_fields):
+                logging.warning("Missing required fields in data")
                 return {"message": "Missing required fields"}, 400
 
-            username = data['username']
+            http_port = data.get('http_port')
+            socks_port = data.get('socks_port')
+
+            # Check if the ports are numbers and in the given range
+            if not (10000 <= int(http_port) <= 65000 and 10000 <= int(socks_port) <= 65000):
+                logging.warning("Port numbers out of allowed range")
+                return {"message": "Port numbers should be between 10000 and 65000"}, 400
+
+            username = data.get('username')
+            id = data.get('id', None)
+            serial = data.get('serial')
+            device = data.get('device')
+            
             if user_exists(username):
+                logging.warning(f"User {username} already exists")
                 return {"message": f"User with username {username} already exists"}, 400
             
+            logging.info(f"User existence check passed for {username}")
+
+            if serial_exists(serial):
+                logging.warning(f"Serial {serial} already exists")
+                return {"message": f"Serial {serial} already exists"}, 400
+
+            logging.info(f"Serial existence in Redis check passed for {username}")
+
+            if id and not re.match("^[a-zA-Z]{2}[0-9]{1,3}$", id):
+                return {"message": "Invalid ID format"}, 400
+
             mode = data.get('mode')
             ext_ip = data.get('ext_ip', "none")
             parent_ip = data.get('parent_ip', "none")
-            http_port = data.get('http_port', 8080)  # default port
-            socks_port = data.get('socks_port', 1080)  # default port
+            http_port = data.get('http_port', 8080)
+            socks_port = data.get('socks_port', 1080)
 
-            add_user_to_acl(username, data['password'])
-            add_user_config(username, mode, parent_ip, ext_ip, http_port, socks_port)
+            logging.info(f"Processing {mode} mode with external IP {ext_ip}")
 
-            return {"message": "User added successfully"}, 201
+            if mode == "modem":
+                if ext_ip == "none":
+                    logging.warning("In modem mode, ext_ip cannot be none")
+                    return {"message": "In modem mode, ext_ip is required"}, 400
+                if parent_ip == "none" and ext_ip == "none":
+                    logging.warning("Both parent_ip and ext_ip cannot be 'none', you have to set ext_ip for modem mode.")
+                    return {"message": "Both parent_ip and ext_ip cannot be 'none', you have to set ext_ip for modem mode."}, 400
+                elif parent_ip != "none" and ext_ip != "none":
+                    logging.warning("Both parent_ip and ext_ip cannot be specified, set only ext_ip for modem mode.")
+                    return {"message": "Both parent_ip and ext_ip cannot be specified, set only ext_ip for modem mode."}, 400
+                elif ext_ip != "none":
+                    if id is None:
+                        return {"message": "ID is required for modem mode"}, 400
+                    write_modem_ip(ext_ip, id)
+
+            if mode == "parent":
+                if parent_ip == "none":
+                    logging.warning("In parent mode, parent_ip cannot be none")
+                    return {"message": "In parent mode, parent_ip is required"}, 400
+                elif parent_ip == "none" and ext_ip == "none":
+                    logging.warning("Both parent_ip and ext_ip cannot be 'none', you have to set parent_ip for parent mode.")
+                    return {"message": "Both parent_ip and ext_ip cannot be 'none', you have to set parent_ip for parent mode."}, 400
+                elif parent_ip != "none" and ext_ip != "none":
+                    logging.warning("Both parent_ip and ext_ip cannot be specified, set only parent_ip for parent mode.")
+                    return {"message": "Both parent_ip and ext_ip cannot be specified, set only parent_ip for parent mode."}, 400
+
+            token = generate_short_token()
+            logging.info(f"Generated token: {token}")
+
+            acl_result = add_user_to_acl(username, data.get('password'))
+            config_result = add_user_config(username, mode, parent_ip, ext_ip, http_port, socks_port, id=id)
+
+            if not acl_result:
+                logging.error(f"Failed to add user {username} to ACL. Aborting operation.")
+                return {"message": "Failed to add user to ACL"}, 500
+            else:
+                logging.info(f"Successfully added user {username} to ACL.")
+
+            if not config_result:
+                logging.error(f"Failed to add user config for {username}. Rolling back ACL.")
+                remove_user_from_acl(username)
+                return {"message": "Failed to add user config. Rolled back ACL"}, 500
+            else:
+                logging.info(f"Successfully added user config for {username}.")
+
+            redis_result = store_to_redis({
+                "username": username,
+                "id": id,
+                "serial": serial,
+                "mode": mode,
+                "device": device,
+                "role": "user"
+            }, token)
+            
+            if not redis_result:
+                logging.error(f"Failed to store user data to Redis for {username}. Rolling back ACL and config.")
+                remove_user_from_acl(username)
+                remove_user_config(username)
+                return {"message": "Failed to store user data to Redis. Rolled back ACL and config"}, 500
+            else:
+                logging.info(f"Successfully added data to redis for {username}.")
+
+            logging.info("User added successfully")
+            return {"message": "User added successfully", "token": token}, 201  
 
         except Exception as e:
+            logging.error(f"An error occurred: {str(e)}")
             return {"message": f"An error occurred: {str(e)}"}, 500
 
 class UpdateUser(Resource):
+    @requires_role("admin")
     def patch(self):
-        data = request.json
-        old_username = data.get('old_username')
-        new_username = data.get('new_username')
-        new_password = data.get('new_password')
-        
-        # Checking for required data
-        if not old_username or not new_username or not new_password:
-            return {"message": "Required data missing"}, 400
+        try:
+            data = request.json
+            if data is None:
+                return {"message": "Invalid request: JSON body required"}, 400
 
-        # Check for user existence
-        if not user_exists(old_username):
-            return {"message": f"User {old_username} does not exist"}, 404
+            old_username = data.get('old_username')
+            new_username = data.get('new_username')
+            new_password = data.get('new_password')
 
-        # Update user record in ACL
-        with open(ACL_PATH, 'r') as file:
-            users = file.readlines()
+            # Validate required fields
+            if not old_username or not new_username or not new_password:
+                return {"message": "Required data missing"}, 400
 
-        updated_users = []
-        for user in users:
-            if user.startswith(f"{old_username}:"):
-                updated_users.append(new_username + ":CL:" + new_password + "\n")
-            else:
-                updated_users.append(user)
-        
-        with open(ACL_PATH, 'w') as file:
-            file.writelines(updated_users)
+            # Check for user existence
+            if not user_exists(old_username):
+                return {"message": f"User {old_username} does not exist"}, 404
 
-        # Update 3proxy configuration
-        with open(CONFIG_PATH, 'r') as file:
-            config = file.read()
+            # Update user record in ACL
+            with open(ACL_PATH, 'r') as file:
+                users = file.readlines()
 
-        config = config.replace(f"#start http {old_username}", f"#start http {new_username}")
-        config = config.replace(f"#end http {old_username}", f"#end http {new_username}")
-        config = config.replace(f"#start socks {old_username}", f"#start socks {new_username}")
-        config = config.replace(f"#end socks {old_username}", f"#end socks {new_username}")
-        config = config.replace(f"allow {old_username}", f"allow {new_username}")
+            updated_users = [new_username + ":CL:" + new_password + "\n" if user.startswith(f"{old_username}:") else user for user in users]
 
-        with open(CONFIG_PATH, 'w') as file:
-            file.write(config)
+            with open(ACL_PATH, 'w') as file:
+                file.writelines(updated_users)
 
-        return {"message": f"User {old_username} updated successfully"}, 200
+            # Update 3proxy configuration
+            with open(CONFIG_PATH, 'r') as file:
+                config = file.read()
+
+            config_updates = {
+                f"# Start http for {old_username}": f"# Start http for {new_username}",
+                f"# End http for {old_username}": f"# End http for {new_username}",
+                f"# Start socks for {old_username}": f"# Start socks for {new_username}",
+                f"# End socks for {old_username}": f"# End socks for {new_username}",
+                f"allow {old_username}": f"allow {new_username}"
+            }
+
+            for old, new in config_updates.items():
+                config = config.replace(old, new)
+
+            with open(CONFIG_PATH, 'w') as file:
+                file.write(config)
+
+            return {"message": f"User {old_username} updated successfully"}, 200
+
+        except Exception as e:
+            logging.error(f"An error occurred: {str(e)}")
+            return {"message": f"An error occurred: {str(e)}"}, 500
 
 class ChangeDevice(Resource):
+    @requires_role("admin")
     def patch(self):
-        data = request.json
-        old_ip = data['old_ip']
-        new_ip = data['new_ip']
-        
-        if not ip_exists_in_config(old_ip):
-            return {"message": f"IP address {old_ip} not found in config"}, 404
+        try:
+            data = request.json
+            if data is None:
+                return {"message": "Invalid request: JSON body required"}, 400
 
-        change_device_in_config(old_ip, new_ip)
-        return {"message": "IP address updated successfully"}, 200
+            old_ip = data.get('old_ip')
+            new_ip = data.get('new_ip')
+            old_id = data.get('old_id')
+            new_id = data.get('new_id')
+            ext_ip = data.get('ext_ip')  # For function write_modem_ip
+
+            if old_ip and new_ip:
+                if not ip_exists_in_config(old_ip):
+                    return {"message": f"IP address {old_ip} not found in parent directive"}, 404
+                change_device_in_config(old_ip, new_ip)
+
+            if old_id and new_id:
+                if not id_exists_in_config(old_id):
+                    return {"message": f"ID {old_id} not found in config"}, 404
+
+                if ext_ip:
+                    write_modem_ip(ext_ip, new_id)
+                change_id_in_config(old_id, new_id)
+
+            return {"message": "IP address and/or ID updated successfully"}, 200
+
+        except Exception as e:
+            logging.error(f"An error occurred: {str(e)}")
+            return {"message": f"An error occurred: {str(e)}"}, 500
 
 class ModemToggle(Resource):
-    def post(self):
-        data = request.json
-        serial_number = data['serial_number']
-        device_model = data['device']
-        mode = data['mode']
-        interface_name = data.get('ifname')  # Необязательный параметр
+    @requires_role("admin")
+    def post(self, admin_token):
+        try:
+            # Проверка админских прав с помощью токена из URL
+            admin_data = get_data_from_redis(admin_token)
+            if not admin_data or admin_data.get('role') != 'admin':
+                return {"message": "Unauthorized access"}, 401
 
-        status_handler = MODEM_HANDLERS.get(device_model, {}).get('status')
-        status = status_handler(serial_number) if status_handler else None
+            data = request.json
+            if data is None:
+                return {"message": "Invalid request: JSON body required"}, 400
+            
+            serial_number = data.get('serial_number')
+            device_model = data.get('device')
+            mode = data.get('mode')
+            interface_name = data.get('ifname')  # Optional parameter
 
-        if status == "device_not_found":
-            return {"message": "Device not found, possibly it has lost connection"}, 500
-        elif status == "timeout":
-            return {"message": "Device timed out, possibly it has lost connection"}, 500
+            if not all([serial_number, device_model, mode]):
+                return {"message": "Missing required fields"}, 400
 
-        if mode == "modem":
-            if status == "rndis":
-                ip_address = wait_for_ip(interface_name)
-                if ip_address != '127.0.0.1':
-                    return {"message": "Modem is already on", "ip_address": ip_address}, 200
-                return {"message": "Interface not ready, unable to get IP address"}, 500
-            else:
-                handler = MODEM_HANDLERS.get(device_model, {}).get('on')
-                try:
+            status_handler = MODEM_HANDLERS.get(device_model, {}).get('status')
+            status = status_handler(serial_number) if status_handler else None
+
+            if status == "device_not_found":
+                return {"message": "Device not found, possibly it has lost connection"}, 500
+            elif status == "timeout":
+                return {"message": "Device timed out, possibly it has lost connection"}, 500
+
+            if mode == "modem":
+                if status == "rndis":
+                    ip_address = wait_for_ip(interface_name)
+                    if ip_address != '127.0.0.1':
+                        return {"message": "Modem is already on", "ip_address": ip_address}, 200
+                    return {"message": "Interface not ready, unable to get IP address"}, 500
+                else:
+                    handler = MODEM_HANDLERS.get(device_model, {}).get('on')
                     handler(serial_number)
                     ip_address = wait_for_ip(interface_name)
                     if ip_address != '127.0.0.1':
                         return {"message": "Modem turned on successfully", "ip_address": ip_address}, 200
                     return {"message": "Interface not ready, unable to get IP address"}, 500
-                except Exception as e:
-                    return {"message": str(e)}, 500
 
-        elif mode == "parent":
-            if status == "rndis":
-                handler = MODEM_HANDLERS.get(device_model, {}).get('off')
-                try:
+            elif mode == "parent":
+                if status == "rndis":
+                    handler = MODEM_HANDLERS.get(device_model, {}).get('off')
                     handler(serial_number)
                     return {"message": "Modem turned off successfully"}, 200
-                except Exception as e:
-                    return {"message": str(e)}, 500
+                else:
+                    return {"message": "Modem is already turned off"}, 200
             else:
-                return {"message": "Modem is already turned off"}, 200
+                return {"message": "Invalid mode provided. Use either 'modem' or 'parent' as mode field."}, 400
 
-        else:
-            return {"message": "Invalid mode provided. Use either 'modem' or 'parent' as mode field."}, 400
+        except Exception as e:
+            logging.error(f"An error occurred: {str(e)}")
+            return {"message": f"An error occurred: {str(e)}"}, 500
 
 class ModemStatus(Resource):
-    def get(self, serial_number):
-        handler = MODEM_HANDLERS.get(device_model, {}).get('status')
+    @requires_role("admin")
+    def get(self, serial_number, device_model):
+        try:
+            handler = MODEM_HANDLERS.get(device_model, {}).get('status')
+            if not handler:
+                return {"message": "Invalid device model provided. Use a correct 'device' field."}, 400
 
-        if handler:
-            try:
-                status = handler(serial_number)
-                return {"message": status}, 200
-            except Exception as e:
-                return {"message": str(e)}, 500
-        else:
-            return {"message": "Invalid device model provided. Use a correct 'device' field."}, 400
+            status = handler(serial_number)
+            return {"message": status}, 200
+
+        except Exception as e:
+            logging.error(f"An error occurred: {str(e)}")
+            return {"message": f"An error occurred: {str(e)}"}, 500
 
 class ProxyCount(Resource):
+    @requires_role("admin")
     def get(self):
-        # Connect to the MySQL database
-        connection = mysql.connector.connect(
-            host="10.66.66.8",
-            user="opz",
-            password="Qwerty1@3",
-            database="testbase"
-        )
-
-        #db = mysql.connector.connect(host=host, user=user, password=password, database=database)
-        #cursor = db.cursor()
-        cursor = connection.cursor(dictionary=True)
+        connection = None
+        cursor = None
 
         try:
+            connection = connect_to_mysql()
+            if connection is None:
+                raise Exception("Failed to connect to MySQL")
+
+            cursor = connection.cursor(dictionary=True)
             sql = """
             SELECT 
                 provider,
@@ -556,28 +1062,33 @@ class ProxyCount(Resource):
                 provider;
             """
             cursor.execute(sql)
-            results = cursor.fetchall() #sql_query
-            return results, 200  # Return the results and a 200 OK status code
-        except Exception as e:
-            return {"error": str(e)}, 500  # Return the error message and a 500 Internal Server Error status code
-        finally:
-            cursor.close()
-            connection.close()
+            results = cursor.fetchall()
+            return results, 200
 
+        except Exception as e:
+            logging.error(f"An error occurred: {str(e)}")
+            return {"error": str(e)}, 500
+
+        finally:
+            if cursor:
+                cursor.close()
+            if connection:
+                connection.close()
 
 #resources
-api.add_resource(Reboot, '/api/reboot/<string:serial_number>')
-api.add_resource(RebootStatus, '/api/rebootstatus/<string:serial_number>')
-api.add_resource(ChangeIP, '/api/changeip/<string:serial_number>')
-api.add_resource(AutoChangeIP, '/api/changeip/auto/<string:serial_number>')
-api.add_resource(AddUser, '/api/add_user')
-api.add_resource(DeleteUser, '/api/delete_user')
-api.add_resource(UpdateAuth, '/api/update_auth')
-api.add_resource(UpdateUser, '/api/update_user')
-api.add_resource(ChangeDevice, '/api/change_device')
-api.add_resource(ModemToggle, '/api/modem')
-api.add_resource(ModemStatus, '/api/modemstatus/<string:serial_number>')
-api.add_resource(ProxyCount, '/api/proxycount')
+api.add_resource(Reboot, '/api/reboot/<string:token>') #user role
+api.add_resource(RebootStatus, '/api/reboot_status/<string:token>') #user role
+api.add_resource(ChangeIP, '/api/changeip/<string:token>') #user role
+api.add_resource(AutoChangeIP, '/api/changeip/auto/<string:token>') #user role
+api.add_resource(AddUser, '/api/add_user/<string:token>') #admin role
+api.add_resource(DeleteUser, '/api/delete_user/<string:token>') #admin role
+api.add_resource(UpdateAuth, '/api/update_auth') #admin role
+
+api.add_resource(UpdateUser, '/api/update_user') #admin role
+api.add_resource(ChangeDevice, '/api/change_device') #admin role
+api.add_resource(ModemToggle, '/api/modem/<string:token>') #admin role
+api.add_resource(ModemStatus, '/api/modemstatus/<string:token>/<string:device_model>') #admin role
+api.add_resource(ProxyCount, '/api/proxycount') #admin role
 
 if __name__ == '__main__':
     app.run(debug=True)
