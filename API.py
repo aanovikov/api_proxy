@@ -8,6 +8,7 @@ import os
 from subprocess import Popen, PIPE, TimeoutExpired, run
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+import atexit
 import datetime
 from threading import Lock
 import textwrap
@@ -24,6 +25,8 @@ import traceback
 import logging
 
 config_lock = Lock()
+
+atexit.register(lambda: scheduler.shutdown())
 
 logging.basicConfig(level=logging.INFO)
 
@@ -81,40 +84,70 @@ def check_reboot_status(serial_number):
     except subprocess.CalledProcessError:
         return 'Reboot in progress'
 
+def toggle_airplane_mode(serial_number, delay=1):
+    #Toggle airplane mode on Android device
+    adb_command = f"adb -s {serial_number} shell"
+    logging.info(f"Executing adb command: {adb_command}")
+    child = pexpect.spawn(adb_command)
+    child.expect('\$', timeout=10)
+
+    # Turn airplane mode ON
+    airplane_on_command = "su -c 'settings put global airplane_mode_on 1; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true'"
+    logging.info(f"Executing airplane ON command: {airplane_on_command}")
+    child.sendline(airplane_on_command)
+    child.expect_exact('Broadcast completed: result=0', timeout=10)
+    
+    # Pause for a while
+    logging.info(f"Pause for {delay} seconds")
+    time.sleep(delay)
+
+    # Turn airplane mode OFF
+    airplane_off_command = "su -c 'settings put global airplane_mode_on 0; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false'"
+    logging.info(f"Executing airplane OFF command: {airplane_off_command}")
+    child.sendline(airplane_off_command)
+    child.expect_exact('Broadcast completed: result=0', timeout=10)
+
+    child.sendline('exit')
+    child.close()
+
 def get_ip_address(interface_name):
     try:
-        return ni.ifaddresses(interface_name)[ni.AF_INET][0]['addr']
-    except Exception: # Здесь можно указать конкретный тип исключения
+        ip_address = ni.ifaddresses(interface_name)[ni.AF_INET][0]['addr']
+        logging.info(f"Interface {interface_name}: IP address obtained - {ip_address}")
+        return ip_address
+    except Exception as e:
+        logging.error(f"Error while fetching IP for interface {interface_name}: {str(e)}")
         return '127.0.0.1'
 
-def wait_for_ip(interface_name, retries=5, delay=2):
-    for _ in range(retries):
+def wait_for_ip(interface_name, retries=5, delay=3):
+    for i in range(retries):
         ip = get_ip_address(interface_name)
+        logging.info(f"Attempt {i+1}: IP address is {ip}")
         if ip != '127.0.0.1':
             return ip
         time.sleep(delay)
     return '127.0.0.1'
 
 #for alcatel
-def modem_on_alcatel(serial_number):
-    modem_on_alcatel = f"adb -s {serial_number} shell svc usb setFunctions rndis"
-    logging.info(f"Executing adb command: {modem_on_alcatel}")
+def modem_on_any(serial_number):
+    modem_on_any = f"adb -s {serial_number} shell svc usb setFunctions rndis"
+    logging.info(f"Executing adb command: {modem_on_any}")
     
-    result = subprocess.run(modem_on_alcatel.split(), stdout=subprocess.PIPE)
+    result = subprocess.run(modem_on_any.split(), stdout=subprocess.PIPE)
     logging.info(result.stdout.decode())
 
-def modem_off_alcatel(serial_number):
-    modem_off_alcatel = f"adb -s {serial_number} shell svc usb setFunctions none"
-    logging.info(f"Executing adb command: {modem_off_alcatel}")
+def modem_off_any(serial_number):
+    modem_off_any = f"adb -s {serial_number} shell svc usb setFunctions none"
+    logging.info(f"Executing adb command: {modem_off_any}")
     
-    result = subprocess.run(modem_off_alcatel.split(), stdout=subprocess.PIPE)
+    result = subprocess.run(modem_off_any.split(), stdout=subprocess.PIPE)
     logging.info(result.stdout.decode())
 
-def modem_status_alcatel(serial_number):
-    modem_status_alcatel_cmd = f"adb -s {serial_number} shell svc usb getFunctions"
-    logging.info(f"Executing adb command: {modem_status_alcatel_cmd}")
+def modem_status_any(serial_number):
+    modem_status_any_cmd = f"adb -s {serial_number} shell svc usb getFunctions"
+    logging.info(f"Executing adb command: {modem_status_any_cmd}")
     
-    process = Popen(modem_status_alcatel_cmd.split(), stdout=PIPE, stderr=PIPE)
+    process = Popen(modem_status_any_cmd.split(), stdout=PIPE, stderr=PIPE)
     try:
         stdout, stderr = process.communicate(timeout=10) # 10 секунд таймаута
         error = stderr.decode()
@@ -130,20 +163,20 @@ def modem_status_alcatel(serial_number):
         return "timeout"
 
 #for samsung
-def modem_a2(serial_number):
-    modem_a2 = f"adb -s {serial_number} shell 'input keyevent KEYCODE_WAKEUP && am start -n com.android.settings/.TetherSettings && sleep 1 && input tap 465 545'"
-    logging.info(f"Executing adb command: {modem_a2}")
+def modem_on_off_a2(serial_number):
+    modem_on_off_a2 = f"adb -s {serial_number} shell 'input keyevent KEYCODE_WAKEUP && am start -n com.android.settings/.TetherSettings && sleep 1 && input tap 465 545'"
+    logging.info(f"Executing adb command: {modem_on_off_a2}")
 
-    result = subprocess.run(modem_a2, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    result = subprocess.run(modem_on_off_a2, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     logging.info(result.stdout.decode())
     logging.info(result.stderr.decode())
 
 def modem_status_a2(serial_number):
-    modem_status_a2_cmd = f"adb -s {serial_number} shell svc usb getFunction"
-    logging.info(f"Executing adb command: {modem_status_a2_cmd}")
+    modem_status_a2 = f"adb -s {serial_number} shell svc usb getFunction"
+    logging.info(f"Executing adb command: {modem_status_a2}")
     
-    process = Popen(modem_status_a2_cmd.split(), stdout=PIPE, stderr=PIPE)
+    process = Popen(modem_status_a2.split(), stdout=PIPE, stderr=PIPE)
     try:
         stdout, stderr = process.communicate(timeout=10) # 10 секунд таймаута
         error = stderr.decode()
@@ -159,17 +192,37 @@ def modem_status_a2(serial_number):
         return "timeout"
 
 MODEM_HANDLERS = {
-    'alcatel': {
-        'on': modem_on_alcatel,
-        'off': modem_off_alcatel,
-        'status': modem_status_alcatel
+    'any': {
+        'on': modem_on_any,
+        'off': modem_off_any,
+        'status': modem_status_any
     },
     'a2': {
-        'on': modem_a2,  # Assuming a similar 'modem_off_a2' function
-        'off': modem_a2, # Same function can be used for on/off in this case
+        'on': modem_on_off_a2,  # Assuming a similar 'modem_off_a2' function
+        'off': modem_on_off_a2, # Same function can be used for on/off in this case
         'status': modem_status_a2
     }
 }
+
+def reestablish_rndis_after_reboot(serial_number, device_type, device_id):
+    for _ in range(10):  # Максимальное число попыток проверки состояния перезагрузки
+        status = check_reboot_status(serial_number)
+        if status == "OK":
+            break
+        time.sleep(10)  # Ожидание между попытками
+
+    if device_type not in MODEM_HANDLERS:
+        logging.error(f"Unknown device type: {device_type}. Can't reestablish rndis mode.")
+        return
+
+    # После перезагрузки включить режим rndis для устройства
+    MODEM_HANDLERS[device_type]['on'](serial_number)
+
+    # Получение нового IP-адреса
+    new_ip = wait_for_ip(device_id)
+
+    # Записать новый IP-адрес
+    write_modem_ip(new_ip, device_id)
 
 #Device api manage functions end;
 
@@ -362,6 +415,67 @@ def update_auth_in_file(username, protocol, auth_type, allow_ip):
     with open(CONFIG_PATH, 'w') as file:
         file.writelines(new_config)
 
+def update_mode_in_config(new_mode, parent_ip, device_token, http_port, socks_port):
+    device_data = get_data_from_redis(device_token)
+    current_mode = device_data.get('mode')
+    device_id = device_data.get('id')
+    username = device_data.get('username')
+
+    logging.debug(f"Current device_id: {device_id}")
+    logging.debug(f"Current device_id: {current_mode}")
+
+    if str(new_mode) == str(current_mode):
+        return {"message": f"Mode for device {device_id} is already set to {new_mode}", "status_code": 200}
+
+    new_lines = []
+    inside_user_block = False
+
+    logging.debug(f"Debugging http_port: {http_port}, socks_port: {socks_port}")
+
+    with open(CONFIG_PATH, "r") as f:
+        lines = f.readlines()
+
+    for line in lines:
+        new_line = line.strip()
+
+        if f"# Start http for {username}" in line:
+            inside_user_block = True
+
+        if f"# End socks for {username}" in line:
+            inside_user_block = False
+
+        if inside_user_block:
+            if new_mode == 'modem':
+                if 'parent' in line:
+                    continue  # Просто пропустим эту строку, и она не попадет в новый конфиг
+                elif 'proxy -n -a -p' in line:
+                    new_line = re.sub(r'-p\d+', f'-p{http_port}', line)
+                    new_line = new_line.rstrip() + f' -e$"/etc/3proxy/modem_ip/{device_id}"\n'
+                elif 'socks -n -a -p' in line:
+                    new_line = re.sub(r'-p\d+', f'-p{socks_port}', line)
+                    new_line = new_line.rstrip() + f' -e$"/etc/3proxy/modem_ip/{device_id}"\n'
+            elif new_mode == 'parent':
+                if 'proxy -n -a -p' in line:
+                    new_lines.append(f'parent 1000 http {parent_ip} 8080 android android\n')
+                    new_line = re.sub(r'-p\d+', f'-p{http_port}', line).strip()
+                    new_line = re.sub(r' -e\$\"/etc/3proxy/modem_ip/\w+\"', '', new_line)
+                elif 'socks -n -a -p' in line:
+                    new_lines.append(f'parent 1000 socks5 {parent_ip} 8080 android android\n')
+                    new_line = re.sub(r'-p\d+', f'-p{socks_port}', line).strip()
+                    new_line = re.sub(r' -e\$\"/etc/3proxy/modem_ip/\w+\"', '', new_line)
+
+        if new_line:
+            new_lines.append(new_line.strip() + '\n')  # Добавляем новую строку, если она не пуста
+
+    with open(CONFIG_PATH, "w") as f:
+        f.writelines(new_lines)
+
+    # Обновляем значение в Redis
+    update_data_in_redis(device_token, 'mode', new_mode)
+
+    response = f"Mode for device {device_id} has been changed to {new_mode}"
+    return {"message": f"Mode for device {device_id} has been changed to {new_mode}", "status_code": 200}
+
 def ip_exists_in_config(ip_address):
     with open(CONFIG_PATH, 'r') as file:
         content = file.read()
@@ -472,6 +586,10 @@ def get_data_from_redis(token):
         raise Exception("No data found in Redis")
     return {k.decode('utf-8'): v.decode('utf-8') for k, v in all_values.items()}
 
+def update_data_in_redis(token, field, value):
+    r = connect_to_redis()
+    r.hset(token, field, value)
+
 def delete_from_redis(token):
     try:
         logging.info(f"Deleting token: {token} from Redis")
@@ -561,13 +679,25 @@ class Reboot(Resource):
     def get(self, token):
         user_data = get_data_from_redis(token)
         serial_number = user_data.get('serial')
+        device = user_data.get('device')
+        mode = user_data.get('mode')
+        device_id = user_data.get('id')  # Получаем ID из Redis
 
         if not serial_number:
             return {'error': 'Serial number not found'}, 400
 
-        logging.info(f"Received serial number: {serial_number}")
-        adb_reboot_device(serial_number)
-        return {'reboot': 'in progress', 'message': 'Reboot command sent.'}, 202
+        logging.info(f"Received device ID: {device_id}")  # Логируем ID устройства для лучшего понимания
+
+        if mode == "parent":
+            adb_reboot_device(serial_number)
+            return {'reboot': 'in progress', 'message': 'Reboot command sent.'}, 202
+
+        if mode == "modem":
+            adb_reboot_device(serial_number)  # Сразу перезапускаем устройство
+            scheduler.add_job(reestablish_rndis_after_reboot, args=[serial_number, device, device_id], id=serial_number)  # Немедленно планируем задание
+            return {'reboot': 'scheduled for modem mode', 'message': 'Reboot and reestablish scheduled.'}, 202
+
+        return {'error': 'Unknown mode provided'}, 400
 
 class RebootStatus(Resource):
     #@requires_role("user")
@@ -586,7 +716,6 @@ class RebootStatus(Resource):
             return {'status': 'Reboot in progress', 'message': 'Device not ready.'}, 200
 
 class ChangeIP(Resource):
-    #@requires_role("user")
     def get(self, token):
         user_data = get_data_from_redis(token)
         serial_number = user_data.get('serial')
@@ -594,70 +723,53 @@ class ChangeIP(Resource):
         if not serial_number:
             return {'error': 'Serial number not found'}, 400
 
-        logging.info(f"Received serial number: {serial_number}") 
-        adb_command = f"adb -s {serial_number} shell"
-        logging.info(f"Executing adb command: {adb_command}") 
+        logging.info(f"Received serial number: {serial_number}")
         
         try:
-            child = pexpect.spawn(adb_command)
-            child.expect('\$', timeout=10) # Ожидаем символ "$", увеличиваем timeout до 60 секунд
-            
-            airplane_on = "su -c 'settings put global airplane_mode_on 1; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true'"
-            logging.info(f"Executing airplane command: {airplane_on}") 
-            
-            child.sendline(airplane_on)
-            child.expect_exact('Broadcast completed: result=0', timeout=10) # Используем expect_exact
-
-            # Делаем паузу в 1 секунду
+            toggle_airplane_mode(serial_number, True)
             logging.info("pause 1 second")
             time.sleep(1)
-            
-            airplane_off = "su -c 'settings put global airplane_mode_on 0; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false'"
-            logging.info(f"Executing airplane command: {airplane_off}")
-            
-            child.sendline(airplane_off)
-            child.expect_exact('Broadcast completed: result=0', timeout=10) 
-
-            # Выходим из консоли
-            child.sendline('exit')
-            child.close()
-
+            toggle_airplane_mode(serial_number, False)
             return {'status': 'success', 'message': 'IP was changed'}, 200
 
         except Exception as e:
-            logging.info(f"Error: {str(e)}") 
+            logging.info(f"Error: {str(e)}")
             return {'status': 'failure', 'message': str(e)}, 500
 
 class AutoChangeIP(Resource):
-    #@requires_role("user")
     def post(self, token):
         user_data = get_data_from_redis(token)
         serial_number = user_data.get('serial')
-        logging.info(serial_number)
-
+        
         if not serial_number:
             return {'error': 'Serial number not found'}, 400
 
         args = parser.parse_args()
         interval_minutes = args['interval_minutes']
 
-        # Если interval_minutes равен 'cancel' или 0, отменяем задание
+        # Cancel the scheduled job
         if interval_minutes == '0':
             try:
-                scheduler.remove_job(token)
+                scheduler.remove_job(serial_number)
                 return {'status': 'success', 'message': f'Scheduled IP changes for device {token} have been cancelled'}, 200
-
             except Exception as e:
                 logging.info(f"Error: {str(e)}")
                 return {'status': 'failure', 'message': str(e)}, 500
 
-        # В противном случае, устанавливаем задание
+        # Schedule a new job
         else:
-            interval_minutes = int(interval_minutes)  # конвертируем в int
+            interval_minutes = int(interval_minutes)  # Convert to int
             try:
-                scheduler.add_job(func=ChangeIP().get, trigger='interval', minutes=interval_minutes, args=[serial_number], id=serial_number)
+                scheduler.add_job(
+                    func=toggle_airplane_mode, 
+                    trigger='interval', 
+                    minutes=interval_minutes, 
+                    args=[serial_number], 
+                    id=serial_number,
+                    name=serial_number,
+                    replace_existing=True
+                )
                 return {'status': 'success', 'message': f'Auto changing IP every {interval_minutes} minutes'}, 200
-
             except Exception as e:
                 logging.info(f"Error: {str(e)}")
                 return {'status': 'failure', 'message': str(e)}, 500
@@ -750,6 +862,41 @@ class UpdateAuth(Resource):
 
             return {"message": "User configuration updated successfully"}, 200
 
+        except Exception as e:
+            logging.error(f"An error occurred: {str(e)}")
+            return {"message": f"An error occurred: {str(e)}"}, 500
+
+class UpdateMode(Resource):
+    @requires_role("admin")
+    def post(self, admin_token):
+        try:
+            admin_data = get_data_from_redis(admin_token)
+            if not admin_data or admin_data.get('role') != 'admin':
+                return {"message": "Unauthorized access"}, 401
+
+            data = request.json
+            if data is None:
+                logging.warning("Invalid request: Missing JSON body")
+                return {"message": "Invalid request: JSON body required"}, 400
+
+            required_fields = ['device_token', 'new_mode', 'parent_ip', 'http_port', 'socks_port']
+            if not all(data.get(field) for field in required_fields):
+                logging.warning("Missing required fields in data")
+                return {"message": "Missing required fields"}, 400
+            
+            device_token = data.get('device_token')
+            new_mode = data.get('new_mode')
+            parent_ip = data.get('parent_ip')
+            http_port = int(data.get('http_port'))
+            socks_port = int(data.get('socks_port'))
+
+            if not (10000 <= http_port <= 65000 and 10000 <= socks_port <= 65000):
+                logging.warning("Port numbers out of allowed range")
+                return {"message": "Port numbers should be between 10000 and 65000"}, 400
+
+            response = update_mode_in_config(new_mode, parent_ip, device_token, http_port, socks_port)
+            return {"message": response["message"]}, response["status_code"]
+            
         except Exception as e:
             logging.error(f"An error occurred: {str(e)}")
             return {"message": f"An error occurred: {str(e)}"}, 500
@@ -1082,13 +1229,14 @@ api.add_resource(ChangeIP, '/api/changeip/<string:token>') #user role
 api.add_resource(AutoChangeIP, '/api/changeip/auto/<string:token>') #user role
 api.add_resource(AddUser, '/api/add_user/<string:token>') #admin role
 api.add_resource(DeleteUser, '/api/delete_user/<string:token>') #admin role
-api.add_resource(UpdateAuth, '/api/update_auth') #admin role
+api.add_resource(UpdateAuth, '/api/update_auth/<string:token>') #admin role
+api.add_resource(UpdateMode, '/api/update_mode/<string:token>') #admin role
 
-api.add_resource(UpdateUser, '/api/update_user') #admin role
-api.add_resource(ChangeDevice, '/api/change_device') #admin role
+api.add_resource(UpdateUser, '/api/update_user/<string:token>') #admin role
+api.add_resource(ChangeDevice, '/api/change_device/<string:token>') #admin role
 api.add_resource(ModemToggle, '/api/modem/<string:token>') #admin role
 api.add_resource(ModemStatus, '/api/modemstatus/<string:token>/<string:device_model>') #admin role
-api.add_resource(ProxyCount, '/api/proxycount') #admin role
+api.add_resource(ProxyCount, '/api/proxycount/<string:token>') #admin role
 
 if __name__ == '__main__':
     app.run(debug=True)
