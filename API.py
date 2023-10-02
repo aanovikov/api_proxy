@@ -24,6 +24,7 @@ from redis.exceptions import ResponseError
 import traceback
 import logging
 from ipaddress import ip_address, AddressValueError
+import traceback
 
 config_lock = Lock()
 
@@ -969,6 +970,7 @@ def get_data_from_redis(token):
     all_values = r.hgetall(token)
     if not all_values:
         logging.error(f"No data found for token {token}")
+        traceback.print_stack()
         raise Exception(f"No data found for token {token}")
     return {k.decode('utf-8'): v.decode('utf-8') for k, v in all_values.items()}
 
@@ -1301,7 +1303,7 @@ class DeleteUser(Resource):
             logging.info("User deleted successfully.")
             return {"message": "User deleted successfully"}, 200
         except Exception as e:
-            logging.error(f"An error occurred: {str(e)}")
+            logging.exception(f"An error occurred: {str(e)}")
             return {"message": "Internal server error"}, 500
 
 class UpdateAuth(Resource):
