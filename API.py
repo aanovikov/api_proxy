@@ -299,6 +299,15 @@ def modem_status_a2(serial_number):
         logging.error(f"Timeout during modem status check for device {serial_number}")
         return "timeout"
 
+def modem_on_off_ais(serial_number):
+    modem_on_off_ais = f"adb -s {serial_number} shell 'input keyevent KEYCODE_WAKEUP && am start -n com.android.settings/.TetherSettings && sleep 1 && input tap 408 185'"
+    logging.info(f"Executing adb command to toggle modem: {modem_on_off_ais}")
+
+    result = subprocess.run(modem_on_off_ais, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    logging.info(f"Output of adb command: {result.stdout.decode()}")
+    logging.error(f"Error of adb command: {result.stderr.decode()}")
+
 MODEM_HANDLERS = {
     'any': {
         'on': modem_on_any,
@@ -308,6 +317,11 @@ MODEM_HANDLERS = {
     'a2': {
         'on': modem_on_off_a2,  # Assuming a similar 'modem_off_a2' function
         'off': modem_on_off_a2, # Same function can be used for on/off in this case
+        'status': modem_status_a2
+    },
+    'ais': {
+        'on': modem_on_off_ais,
+        'off': modem_on_off_ais,
         'status': modem_status_a2
     }
 }
@@ -1168,6 +1182,7 @@ class DeviceStatus(Resource):
 
 class ChangeIP(Resource):
     def get(self, token):
+        logging.info(f"Received request to change IP for serial: {serial_number}")
         try:
             user_data = get_data_from_redis(token)
             serial_number = user_data.get('serial')
