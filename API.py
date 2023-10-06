@@ -1500,7 +1500,7 @@ class AddUser(Resource):
                 return {"message": "Device timed out, possibly it has lost connection"}, 500
 
             if user_data['mode'] == 'modem':
-                toggle_wifi(user_data['serial'], "off")
+                #toggle_wifi(user_data['serial'], "off")
 
                 if id is None:
                     logging.warning("ID is required for modem mode")
@@ -1524,7 +1524,7 @@ class AddUser(Resource):
                         return {"message": "Interface not ready, unable to get IP address"}, 500
 
             if user_data['mode'] == "android":
-                toggle_wifi(user_data['serial'], "off")
+                #toggle_wifi(user_data['serial'], "off")
                 
                 if user_data['parent_ip'] == "none":
                     logging.warning("In android mode, parent_ip cannot be none")
