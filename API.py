@@ -545,8 +545,8 @@ def add_user_config(username, mode, parent_ip, http_port, socks_port, id):
             proxy = f"proxy -n -a -p{http_port} -Doid{ifname}"
             socks = f"socks -n -a -p{socks_port} -Doid{ifname}"
         elif mode == "android":
-            proxy = f"proxy -n -a -p{http_port} -Doid{ifname}"
-            socks = f"socks -n -a -p{socks_port} -Doid{ifname}"
+            proxy = f"proxy -n -a -p{http_port}"
+            socks = f"socks -n -a -p{socks_port}"
 
         # Construct the HTTP and SOCKS parts
         http_parts = [
