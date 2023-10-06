@@ -523,9 +523,9 @@ def write_config_to_file(config):
 def add_user_config(username, mode, parent_ip, http_port, socks_port, id):
     try:
         logging.info(f"Attempting to add config for device id{id}.")
-        config_parts = []
+        ifname = id  # Interface name
 
-        # Common parts for http and socks
+        # Common parts for HTTP and SOCKS
         auth_part = "auth strong"
         allow_part = f"allow {username}"
 
@@ -533,42 +533,53 @@ def add_user_config(username, mode, parent_ip, http_port, socks_port, id):
         if mode == "android":
             parent_http = f"parent 1000 http {parent_ip} 8080 android android"
             parent_socks = f"parent 1000 socks5 {parent_ip} 1080 android android"
+            proxy = f"proxy -n -a -p{http_port}"
+            socks = f"socks -n -a -p{socks_port}"
         elif mode == "modem" and parent_ip == "none":
             parent_http = None
             parent_socks = None
+            proxy = f"proxy -n -a -p{http_port} -Doid{ifname}"
+            socks = f"socks -n -a -p{socks_port} -Doid{ifname}"
         else:
             raise ValueError("Invalid combination of mode and parent_ip")
 
-        ifname = id
-
-        if mode == "modem":
-            proxy = f"proxy -n -a -p{http_port} -Doid{ifname}"
-            socks = f"socks -n -a -p{socks_port} -Doid{ifname}"
-        elif mode == "android":
-            proxy = f"proxy -n -a -p{http_port}"
-            socks = f"socks -n -a -p{socks_port}"
-
-        # Construct the HTTP and SOCKS parts
-        http_parts = [
-            f"# Start http for {username} id{id}",
-            "flush",
-            auth_part,
-            allow_part,
-            proxy,
-            f"# End http for {username} id{id}"
-        ]
-        socks_parts = [
-            f"# Start socks for {username} id{id}",
-            "flush",
-            auth_part,
-            allow_part,
-            socks,
-            f"# End socks for {username} id{id}"
-        ]
-
+        # Construct the HTTP and SOCKS blocks
         if mode == "android":
-            http_parts.insert(-1, parent_http)
-            socks_parts.insert(-1, parent_socks)
+            http_parts = [
+                f"# Start http for {username} id{id}",
+                "flush",
+                auth_part,
+                allow_part,
+                parent_http,  # 'parent' comes before 'proxy'
+                proxy,
+                f"# End http for {username} id{id}"
+            ]
+            socks_parts = [
+                f"# Start socks for {username} id{id}",
+                "flush",
+                auth_part,
+                allow_part,
+                parent_socks,  # 'parent' comes before 'socks'
+                socks,
+                f"# End socks for {username} id{id}"
+            ]
+        elif mode == "modem":
+            http_parts = [
+                f"# Start http for {username} id{id}",
+                "flush",
+                auth_part,
+                allow_part,
+                proxy,  # No 'parent', so 'proxy' comes last before comment
+                f"# End http for {username} id{id}"
+            ]
+            socks_parts = [
+                f"# Start socks for {username} id{id}",
+                "flush",
+                auth_part,
+                allow_part,
+                socks,  # No 'parent', so 'socks' comes last before comment
+                f"# End socks for {username} id{id}"
+            ]
 
         # Join the parts together, adding a newline only at the end
         config = "\n".join(http_parts + socks_parts) + "\n"
