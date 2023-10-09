@@ -1,0 +1,4 @@
+.vscode/
+__pycache__/
+git_id
+git_id.pub

@@ -5,7 +5,7 @@ import pexpect
 import time
 import subprocess
 import os
-from subprocess import Popen, PIPE, TimeoutExpired, run
+#from subprocess import Popen, PIPE, TimeoutExpired, run
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 import atexit
@@ -17,7 +17,6 @@ from functools import wraps
 import mysql.connector
 import secrets
 import base64
-import netifaces as ni
 import re
 import redis
 from redis.exceptions import ResponseError
@@ -25,6 +24,12 @@ import traceback
 import logging
 from ipaddress import ip_address, AddressValueError
 import traceback
+from dotenv import load_dotenv
+
+from device_management import adb_reboot_device, get_adb_device_status, os_boot_status
+from network_management import airplane_toggle_cmd, MODEM_HANDLERS, wait_for_ip
+
+from settings import TETHERING_COORDINATES, ALLOWED_PROTOCOLS
 
 config_lock = Lock()
 
@@ -49,288 +54,27 @@ scheduler.start()
 app = Flask(__name__)
 api = Api(app)
 
-ACL_PATH = '/etc/3proxy/users.txt'
-CONFIG_PATH = '/etc/3proxy/3proxy.cfg'
-
-REDIS_HOST = os.environ['REDIS_HOST']
-REDIS_PORT = int(os.environ['REDIS_PORT'])
-REDIS_PASSWORD = os.environ['REDIS_PASSWORD']
-
-ALLOWED_PROTOCOLS = ['http', 'socks', 'both']
+load_dotenv()
 
 MYSQL_SETTINGS = {
-    "host": os.environ['MYSQL_HOST'],
-    "user": os.environ['MYSQL_USER'],
-    "password": os.environ['MYSQL_PASSWORD'],
-    "database": os.environ['MYSQL_DATABASE']
+    "host": os.getenv('MYSQL_HOST'),
+    "user": os.getenv('MYSQL_USER'),
+    "password": os.getenv('MYSQL_PASSWORD'),
+    "database": os.getenv('MYSQL_DATABASE')
 }
 
-# Device api manage:
+REDIS_HOST = os.getenv('REDIS_HOST')
+REDIS_PORT = int(os.getenv('REDIS_PORT'))
+REDIS_PASSWORD = os.getenv('REDIS_PASSWORD')
 
-def adb_reboot_device(serial_number):
-    adb_reboot = f"adb -s {serial_number} reboot"
-    logging.info(f"Executing adb reboot command for device: {serial_number}")
-    result = subprocess.run(adb_reboot.split(), stdout=subprocess.PIPE)
-    logging.debug(f"ADB reboot command output: {result.stdout.decode()}")
+ACL_PATH = os.getenv('ACL_PATH')
+CONFIG_PATH = os.getenv('CONFIG_PATH')
 
-def get_adb_device_status(device_id):
-    try:
-        output = subprocess.check_output(["adb", "-s", device_id, "get-state"], stderr=subprocess.STDOUT).decode('utf-8').strip()
-        logging.info(f"Device {device_id} status: {output}")
-    except subprocess.CalledProcessError as e:
-        error_output = e.output.decode('utf-8').strip()
-        if "not found" in error_output:
-            logging.error(f"Device {device_id} not found")
-            return "not found"
-        else:
-            logging.error(f"Unexpected error for device {device_id}: {error_output}")
-            return "unknown"
-
-    if output == "device":
-        return "device"
-    elif output == "offline":
-        return "offline"
-    elif output == "unauthorized":
-        return "unauthorized"
-    elif output == "bootloader":
-        return "bootloader"
-    else:
-        logging.warning(f"Unknown status for device {device_id}")
-        return "unknown"
-
-def os_boot_status(serial_number):
-    adb_get_boot_completed = f"adb -s {serial_number} shell getprop sys.boot_completed"
-    logging.info(f"Checking reboot status for device: {serial_number}")
-    consecutive_ok = 0  # счетчик подтверждений
-
-    for _ in range(3):  # три попытки подтверждения
-        process = Popen(adb_get_boot_completed.split(), stdout=PIPE, stderr=PIPE)
-
-        try:
-            stdout, stderr = process.communicate(timeout=10)
-            output = stdout.decode('utf-8').strip()
-
-            if output == '1':
-                consecutive_ok += 1  # увеличиваем счетчик
-            else:
-                consecutive_ok = 0  # сбрасываем счетчик
-
-            if consecutive_ok == 3:
-                logging.info(f"Device {serial_number} is online")
-                return 'OK'  # если три подтверждения, возвращаем OK
-
-            time.sleep(1)  # пауза 1 секунда между попытками
-
-        except TimeoutExpired:
-            logging.error(f"Timeout during reboot check for device {serial_number}")
-            return 'Timeout during reboot check'
-        except subprocess.CalledProcessError:
-            logging.error(f"CalledProcessError during reboot check for device {serial_number}")
-            return 'Reboot in progress'
-
-    logging.warning(f"Reboot in progress for device {serial_number}")
-    return 'Reboot in progress'
-
-def toggle_airplane_mode(serial_number, delay=1):
-    try:
-        logging.info(f"Toggling airplane mode for device {serial_number}")
-        adb_command = f"adb -s {serial_number} shell"
-        child = pexpect.spawn(adb_command)
-        child.expect('\$', timeout=10)
-
-        # Turn airplane mode ON
-        airplane_on_command = "su -c 'settings put global airplane_mode_on 1; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true'"
-        logging.info(f"Executing airplane ON command: {airplane_on_command}")
-        child.sendline(airplane_on_command)
-        child.expect_exact('Broadcast completed: result=0', timeout=10)
-        
-        logging.info(f"Pause for {delay} seconds")
-        time.sleep(delay)
-
-        # Turn airplane mode OFF
-        airplane_off_command = "su -c 'settings put global airplane_mode_on 0; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false'"
-        logging.info(f"Executing airplane OFF command: {airplane_off_command}")
-        child.sendline(airplane_off_command)
-        child.expect_exact('Broadcast completed: result=0', timeout=10)
-
-        logging.info("Airplane mode toggled and exiting shell.")
-        child.sendline('exit')
-        child.close()
-
-    except pexpect.exceptions.TIMEOUT as e:
-        logging.error("Timeout occurred")
-        raise
-
-def toggle_wifi(serial_number, action, delay=1, max_retries=10):
-    try:
-        logging.info(f"Toggling WiFi for device {serial_number}")
-
-        # Initial status check
-        adb_command = f"adb -s {serial_number} shell dumpsys wifi | grep 'mNetworkInfo'"
-        output = subprocess.getoutput(adb_command)
-        status = output.split('state: ')[1].split('/')[0]
-        logging.info(f"Current WiFi status: {status}")
-
-        if action == "on" and status == "CONNECTED":
-            logging.info("WiFi is already connected. No action needed.")
-            return
-        elif action == "off" and status == "DISCONNECTED":
-            logging.info("WiFi is already disconnected. No action needed.")
-            return
-
-        # Toggle WiFi
-        toggle_command = "enable" if action == "on" else "disable"
-        subprocess.run(f"adb -s {serial_number} shell svc wifi {toggle_command}", shell=True)
-        logging.info(f"Switched WiFi {action.upper()}. Waiting to update status...")
-
-        # Re-check status with delay and retries
-        retries = 0
-        while retries < max_retries:
-            time.sleep(delay)
-            output = subprocess.getoutput(adb_command)
-            new_status = output.split('state: ')[1].split('/')[0]
-
-            if (action == "on" and new_status == "CONNECTED") or (action == "off" and new_status == "DISCONNECTED"):
-                logging.info(f"New WiFi status: {new_status}. Done!")
-                return
-            
-            logging.info(f"Status not updated yet. Retrying... ({retries + 1}/{max_retries})")
-            retries += 1
-
-        logging.warning("Max retries reached. Exiting function.")
-
-    except Exception as e:
-        logging.error(f"An error occurred: {e}")
-        raise
-
-def get_ip_address(interface_name):
-    try:
-        ip_address = ni.ifaddresses(interface_name)[ni.AF_INET][0]['addr']
-        logging.info(f"Interface {interface_name}: IP address obtained - {ip_address}")
-        return ip_address
-    except Exception as e:
-        logging.error(f"Couldn't fetch IP for interface {interface_name}: {str(e)}")
-        return '127.0.0.1'
-
-def wait_for_ip(interface_name, retries=5, delay=3):
-    logging.info(f"Waiting for IP on interface {interface_name} with {retries} retries and {delay}s delay")
-    for i in range(retries):
-        ip = get_ip_address(interface_name)
-        if ip != '127.0.0.1':
-            logging.info(f"Got a valid IP {ip} on attempt {i+1}")
-            return ip
-        logging.warning(f"Failed to get a valid IP on attempt {i+1}")
-        time.sleep(delay)
-
-    logging.error(f"Exceeded max retries for getting IP on interface {interface_name}")
-    return '127.0.0.1'
-
-#for alcatel
-def modem_on_any(serial_number):
-    modem_on_any = f"adb -s {serial_number} shell svc usb setFunctions rndis"
-    logging.info(f"Executing adb command to turn ON modem: {modem_on_any}")
-
-    result = subprocess.run(modem_on_any.split(), stdout=subprocess.PIPE)
-    logging.info(f"Output of adb command: {result.stdout.decode()}")
-
-def modem_off_any(serial_number):
-    modem_off_any = f"adb -s {serial_number} shell svc usb setFunctions none"
-    logging.info(f"Executing adb command to turn OFF modem: {modem_off_any}")
-
-    result = subprocess.run(modem_off_any.split(), stdout=subprocess.PIPE)
-    logging.info(f"Output of adb command: {result.stdout.decode()}")
-
-def modem_status_any(serial_number):
-    modem_status_any_cmd = f"adb -s {serial_number} shell svc usb getFunctions"
-    logging.info(f"Checking modem status with adb command: {modem_status_any_cmd}")
-    
-    process = Popen(modem_status_any_cmd.split(), stdout=PIPE, stderr=PIPE)
-
-    try:
-        stdout, stderr = process.communicate(timeout=10)
-        error = stderr.decode()
-
-        if f"device '{serial_number}' not found" in error:
-            logging.warning(f"Device {serial_number} not found")
-            return "device_not_found"
-        elif "rndis" in error:
-            logging.info(f"Device {serial_number} is in rndis mode")
-            return "rndis"
-        else:
-            logging.info(f"Device {serial_number} is not in rndis mode")
-            return "rndis_off"
-    except TimeoutExpired:
-        logging.error(f"Timeout occurred while checking status for device {serial_number}")
-        process.kill()
-        return "timeout"
-
-#for samsung
-def modem_on_off_a2(serial_number):
-    modem_on_off_a2 = f"adb -s {serial_number} shell 'input keyevent KEYCODE_WAKEUP && am start -n com.android.settings/.TetherSettings && sleep 1 && input tap 465 545'"
-    logging.info(f"Executing adb command to toggle modem: {modem_on_off_a2}")
-
-    result = subprocess.run(modem_on_off_a2, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    logging.info(f"Output of adb command: {result.stdout.decode()}")
-    logging.error(f"Error of adb command: {result.stderr.decode()}")
-
-def modem_status_a2(serial_number):
-    modem_status_a2 = f"adb -s {serial_number} shell svc usb getFunction"
-    logging.info(f"Checking modem status for device {serial_number} with command: {modem_status_a2}")
-    
-    process = Popen(modem_status_a2.split(), stdout=PIPE, stderr=PIPE)
-    try:
-        stdout, stderr = process.communicate(timeout=10)  # 10 seconds timeout
-        error = stderr.decode()
-        logging.info(f"Received stdout: {stdout.decode()}")
-        logging.error(f"Received stderr: {error}")
-
-        if f"device '{serial_number}' not found" in error:
-            logging.error(f"Device {serial_number} not found")
-            return "device_not_found"
-        elif "rndis" in error:
-            logging.info(f"Device {serial_number} is in rndis mode")
-            return "rndis"
-        else:
-            logging.info(f"Device {serial_number} is not in rndis mode")
-            return "rndis_off"
-    except TimeoutExpired:
-        process.kill()
-        logging.error(f"Timeout during modem status check for device {serial_number}")
-        return "timeout"
-
-def modem_on_off_ais(serial_number):
-    modem_on_off_ais = f"adb -s {serial_number} shell 'input keyevent KEYCODE_WAKEUP && am start -n com.android.settings/.TetherSettings && sleep 1 && input tap 408 185'"
-    logging.info(f"Executing adb command to toggle modem: {modem_on_off_ais}")
-
-    result = subprocess.run(modem_on_off_ais, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    logging.info(f"Output of adb command: {result.stdout.decode()}")
-    logging.error(f"Error of adb command: {result.stderr.decode()}")
-
-MODEM_HANDLERS = {
-    'any': {
-        'on': modem_on_any,
-        'off': modem_off_any,
-        'status': modem_status_any
-    },
-    'a2': {
-        'on': modem_on_off_a2,  # Assuming a similar 'modem_off_a2' function
-        'off': modem_on_off_a2, # Same function can be used for on/off in this case
-        'status': modem_status_a2
-    },
-    'ais': {
-        'on': modem_on_off_ais,
-        'off': modem_on_off_ais,
-        'status': modem_status_a2
-    }
-}
-
-def reestablish_rndis_after_reboot(serial_number, device_type, device_id):
+def reestablish_rndis_after_reboot(serial_number, device_model, device_id):
     job_id = f"modem_{serial_number}"
 
     try:
-        logging.info(f"Starting reestablishment of rndis after reboot for serial: {serial_number}, type: {device_type}, id: {device_id}")
+        logging.info(f"Starting reestablishment of rndis after reboot for serial: {serial_number}, type: {device_model}, id: {device_id}")
         
         for attempt in range(40):  # Maximum number of reboot status checks
             status = os_boot_status(serial_number)
@@ -347,14 +91,14 @@ def reestablish_rndis_after_reboot(serial_number, device_type, device_id):
             logging.info(f"FUNC REESTABLISH: Removed job with ID {job_id} due to unsuccessful reboot.")
             return
 
-        if device_type not in MODEM_HANDLERS:
-            logging.error(f"Unknown device type: {device_type}. Can't reestablish rndis mode.")
+        if device_model not in MODEM_HANDLERS:
+            logging.error(f"Unknown device model: {device_model}. Can't reestablish rndis mode.")
             return
 
         # After reboot, enable rndis mode for the device
-        logging.info(f"Turning on rndis for {serial_number} of type {device_type}")
-        MODEM_HANDLERS[device_type]['on'](serial_number)
-        logging.info(f"Modem turned on for id{device_id}")
+        logging.info(f"Turning on rndis for {serial_number} of model: {device_model}")
+        MODEM_HANDLERS[device_model]['on'](serial_number)
+        logging.info(f"Modem turned on for: id{device_id}")
 
     except Exception as e:
         logging.error(f"An error occurred while reestablishing rndis: {e}")
@@ -366,10 +110,6 @@ def reestablish_rndis_after_reboot(serial_number, device_type, device_id):
     # Save the new IP address
     # logging.info(f"New IP for {device_id} is {new_ip}")
     # write_modem_ip(new_ip, device_id)
-
-#Device api manage functions end;
-
-#3Proxy config apiment:
 
 def read_file(filepath):
     try:
@@ -384,10 +124,10 @@ def write_file(filepath, data):
         logging.info(f"Writing to file at {ACL_PATH}")
         with open(filepath, 'w') as file:
             file.writelines(data)
-            logging.info(f"Successfully wrote to file at {ACL_PATH}")
+            logging.info(f"Successfully wrote to file at: {ACL_PATH}")
         return True
     except Exception as e:
-        logging.error(f"Can't write to the file {filepath}: {str(e)}")
+        logging.error(f"Can't write to the file: {filepath}: {str(e)}")
         return False
 
 def add_user_to_acl(username, password):
@@ -1193,10 +933,10 @@ class DeviceStatus(Resource):
 
 class ChangeIP(Resource):
     def get(self, token):
-        logging.info(f"Received request to change IP for serial: {serial_number}")
         try:
             user_data = get_data_from_redis(token)
             serial_number = user_data.get('serial')
+            logging.info(f"Received request to change IP for serial: {serial_number}")
 
             if not serial_number:
                 logging.error("Serial number not found in user data.")
@@ -1204,7 +944,7 @@ class ChangeIP(Resource):
 
             logging.info(f"Received serial number: {serial_number}")
             
-            toggle_airplane_mode(serial_number)
+            airplane_toggle_cmd(serial_number)
             return {'status': 'success', 'message': 'IP was changed'}, 200
 
         except Exception as e:
@@ -1241,7 +981,7 @@ class AutoChangeIP(Resource):
                 interval_minutes = int(interval_minutes)  # Convert to int
                 try:
                     scheduler.add_job(
-                        func=toggle_airplane_mode, 
+                        func=airplane_toggle_cmd, 
                         trigger='interval', 
                         minutes=interval_minutes, 
                         args=[serial_number], 
@@ -1733,6 +1473,25 @@ class ProxyCount(Resource):
             if connection:
                 connection.close()
 
+class ModemStatus(Resource):
+    @requires_role("admin")
+    def get(self, admin_token, serial_number, device_model):
+        try:
+            logging.info("Received request to CHECK MODEM STATUS.")
+
+            handler = MODEM_HANDLERS.get(device_model, {}).get('status')
+            if not handler:
+                logging.error("Invalid device model provided. Use a correct 'device' field.")
+                return {"message": "Invalid device model provided. Use a correct 'device' field."}, 400
+
+            status = handler(serial_number)
+            logging.info(f"Modem status for serial {serial_number}: {status}")
+            return {"message": status}, 200
+
+        except Exception as e:
+            logging.error(f"An error occurred: {str(e)}")
+            return {"message": f"An error occurred: {str(e)}"}, 500
+
 #resources
 api.add_resource(Reboot, '/api/reboot/<string:token>') #user role
 api.add_resource(DeviceStatus, '/api/device_status/<string:token>') #user role
@@ -1746,7 +1505,7 @@ api.add_resource(UpdateMode, '/api/update_mode/<string:token>') #admin role
 api.add_resource(UpdateUser, '/api/update_user/<string:token>') #admin role
 api.add_resource(ChangeDevice, '/api/change_device/<string:token>') #admin role
 #api.add_resource(ModemToggle, '/api/modem/<string:token>') #admin role
-# don't useapi.add_resource(ModemStatus, '/api/modemstatus/<string:token>/<string:device_model>') #admin role
+api.add_resource(ModemStatus, '/api/modemstatus/<string:token>/<string:device_model>') #admin role
 api.add_resource(ProxyCount, '/api/proxycount/<string:token>') #admin role
 
 if __name__ == '__main__':
