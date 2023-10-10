@@ -15,63 +15,59 @@ AIRPLANE_ON_CMD = "su -c 'settings put global airplane_mode_on 1; am broadcast -
 AIRPLANE_OFF_CMD = "su -c 'settings put global airplane_mode_on 0; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false'"
 WIFI_STATUS_CMD = "adb -s {} shell dumpsys wifi | grep 'mNetworkInfo'"
 
-def generate_command(serial_number, coordinates):
+def generate_command(serial, coordinates):
     x, y = coordinates
-    return f"adb -s {serial_number} shell 'input keyevent KEYCODE_WAKEUP && am start -n com.android.settings/.TetherSettings && sleep 1 && input tap {x} {y}'"
+    return f"adb -s {serial} shell 'input keyevent KEYCODE_WAKEUP && am start -n com.android.settings/.TetherSettings && sleep 1 && input tap {x} {y}'"
 
-def modem_toggle_coordinates(serial_number, device_model): # a2 and ais need to tap on the toggler
+def modem_toggle_coordinates(serial, device_model): # a2 and ais need to tap on the toggler
     try:
         if TETHERING_COORDINATES is None:
-            logging.error("TETHERING_COORDINATES is not defined")
+            logging.error(f"TETHERING_COORDINATES is not defined, serial: {serial}, type: {device_model}")
             return
 
         if device_model not in TETHERING_COORDINATES:
-            logging.error("Invalid device type")
+            logging.error(f"Invalid device serial: {serial}, type: {device_model}")
             return
 
-        command = generate_command(serial_number, TETHERING_COORDINATES[device_model])
-        logging.info(f"Executing adb command to toggle modem: {command}")
+        command = generate_command(serial, TETHERING_COORDINATES[device_model])
+        logging.info(f"Toggling modem: serial: {serial}, type: {device_model}")
 
         result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
         if result.returncode != 0:
-            logging.error(f"Error of adb command: {result.stderr.decode()}")
+            logging.error(f"Error of adb command: {result.stderr.decode()}, serial: {serial}, type: {device_model}")
             return
-
-        logging.info(f"Output of adb command: {result.stdout.decode()}")
         
     except subprocess.CalledProcessError as e:
-        logging.error(f"Command failed with error: {e}")
+        logging.error(f"Command failed with error: {e}, serial: {serial}, type: {device_model}")
     except Exception as e:
-        logging.error(f"COORD: An unexpected error occurred: {e}")
+        logging.error(f"An unexpected error occurred: {e}, serial: {serial}, type: {device_model}")
 
-def modem_toggle_cmd(serial_number, mode):
+def modem_toggle_cmd(serial, mode):
     try:
         if mode not in ['rndis', 'none']:
-            logging.error("Invalid mode. Valid modes are 'rndis' or 'none'")
+            logging.error(f"Invalid mode: {mode} for serial: {serial}. Valid: 'rndis' or 'none'")
             return
         
-        command = f"adb -s {serial_number} shell svc usb setFunctions {mode}"
-        logging.info(f"Executing adb command to set modem mode to {mode.upper()}: {command}")
+        command = f"adb -s {serial} shell svc usb setFunctions {mode}"
+        logging.info(f"Setting mode to {mode.upper()}: {command}, serial: {serial}")
 
         result = subprocess.run(command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
         if result.returncode != 0:
-            logging.error(f"Failed to execute adb command: {result.stderr.decode()}")
+            logging.error(f"Failed to execute: {result.stderr.decode()}, serial: {serial}")
             return
-
-        logging.info(f"Output of adb command: {result.stdout.decode()}")
         
     except subprocess.CalledProcessError as e:
-        logging.error(f"Command failed with error: {e}")
+        logging.error(f"Command failed with error: {e}, serial: {serial}")
     except Exception as e:
-        logging.error(f"CMD: An unexpected error occurred: {e}")
+        logging.error(f"An unexpected error occurred: {e}, serial: {serial}")
 
-def modem_get_status(serial_number, device_type='any'):
-    logging.info(f"Checking modem status for serial: {serial_number}, device model: {device_type}")
+def modem_get_status(serial, device_type='any'):
+    logging.info(f"Checking modem status for serial: {serial}, device model: {device_type}")
 
     # Базовая команда для запроса статуса модема
-    base_command = f"adb -s {serial_number} shell svc usb getFunction"
+    base_command = f"adb -s {serial} shell svc usb getFunction"
 
     # Изменяем команду в зависимости от типа устройства
     if device_type == 'any':
@@ -84,18 +80,18 @@ def modem_get_status(serial_number, device_type='any'):
         #logging.info(f"Received stdout: {stdout.decode()}")
         logging.error(f"Received stderr: {error}")
 
-        if f"device '{serial_number}' not found" in error:
-            logging.error(f"Device {serial_number} not found")
+        if f"device '{serial}' not found" in error:
+            logging.error(f"Device {serial} not found")
             return "device_not_found"
         elif "rndis" in error:
-            logging.info(f"Device {serial_number} is in rndis mode")
+            logging.info(f"Device {serial} is in rndis mode")
             return "rndis"
         else:
-            logging.info(f"Device {serial_number} is NOT in rndis mode")
+            logging.info(f"Device {serial} is NOT in rndis mode")
             return "rndis_off"
     except TimeoutExpired:
         process.kill()
-        logging.error(f"Timeout during modem status check for device {serial_number}")
+        logging.error(f"Timeout during modem status check for device {serial}")
         return "timeout"
 
 MODEM_HANDLERS = {
@@ -116,10 +112,10 @@ MODEM_HANDLERS = {
     }
 }
 
-def airplane_toggle_cmd(serial_number, delay=1):
+def airplane_toggle_cmd(serial, delay=1):
     try:
-        logging.info(f"Toggling airplane mode for device {serial_number}")
-        adb_command = f"adb -s {serial_number} shell"
+        logging.info(f"Toggling airplane mode for device {serial}")
+        adb_command = f"adb -s {serial} shell"
         child = pexpect.spawn(adb_command)
         child.expect('\$', timeout=10)
 
@@ -146,12 +142,12 @@ def airplane_toggle_cmd(serial_number, delay=1):
         logging.error("Timeout occurred")
         raise
 
-def toggle_wifi(serial_number, action, delay=1, max_retries=10):
+def toggle_wifi(serial, action, delay=1, max_retries=10):
     try:
-        logging.info(f"Toggling WiFi for device {serial_number}")
+        logging.info(f"Toggling WiFi for device {serial}")
 
         # Initial status check
-        adb_command = f"adb -s {serial_number} shell dumpsys wifi | grep 'mNetworkInfo'"
+        adb_command = f"adb -s {serial} shell dumpsys wifi | grep 'mNetworkInfo'"
         output = subprocess.getoutput(adb_command)
         status = output.split('state: ')[1].split('/')[0]
         logging.info(f"Current WiFi status: {status}")
@@ -165,7 +161,7 @@ def toggle_wifi(serial_number, action, delay=1, max_retries=10):
 
         # Toggle WiFi
         toggle_command = "enable" if action == "on" else "disable"
-        subprocess.run(f"adb -s {serial_number} shell svc wifi {toggle_command}", shell=True)
+        subprocess.run(f"adb -s {serial} shell svc wifi {toggle_command}", shell=True)
         logging.info(f"Switched WiFi {action.upper()}. Waiting to update status...")
 
         # Re-check status with delay and retries
