@@ -1,24 +1,22 @@
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from flask_restful import Resource, Api, reqparse
+from werkzeug.exceptions import BadRequest
 import time
 import os
-from functools import wraps
 #import pexpect
 #import subprocess
 #from subprocess import Popen, PIPE, TimeoutExpired, run
 #import datetime
 #from threading import Lock
 #import textwrap
-import secrets
-import base64
 import logging
 from ipaddress import ip_address, AddressValueError
 from dotenv import load_dotenv
 
 from device_management import adb_reboot_device, get_adb_device_status, os_boot_status
-from network_management import airplane_toggle_cmd, MODEM_HANDLERS, wait_for_ip
-from schedule_management import enable_modem, schedule_job
+from network_management import airplane_toggle_cmd, MODEM_HANDLERS, wait_for_ip, enable_modem
 from settings import TETHERING_COORDINATES, ALLOWED_PROTOCOLS
+from tools import schedule_job, generate_short_token, requires_role, is_valid_port
 import storage_management as sm
 import conf_management as cm
 
@@ -40,54 +38,6 @@ api = Api(app)
 
 ACL_PATH = os.getenv('ACL_PATH')
 CONFIG_PATH = os.getenv('CONFIG_PATH')
-
-def generate_short_token():
-    random_bytes = secrets.token_bytes(15)  # 15 bytes should generate a 20-character token when base64 encoded
-    token = base64.urlsafe_b64encode(random_bytes).decode('utf-8')
-    return token
-
-def requires_role(required_role):
-    def decorator(f):
-        @wraps(f)
-        def decorated_function(*args, **kwargs):
-            token = kwargs.pop('token', None)
-
-            r = sm.connect_to_redis()
-            if token is None:
-                logging.error("Token is missing in the request.")
-                return {"message": "Unauthorized"}, 401
-            
-            # Checking the type of the Redis key
-            key_type = r.type(token).decode('utf-8')
-            if key_type != 'hash':
-                logging.error(f"Token is of invalid type: {key_type}. Expected 'hash'.")
-                return {"message": "Invalid acces token"}, 400
-
-            role_data = r.hget(token, "role")
-            if role_data is None:
-                logging.error(f"No role found for token {token}")
-                return {"message": "Unauthorized"}, 401
-            
-            role = role_data.decode('utf-8')  # Декодирование может быть необходимым
-            if role != required_role:
-                logging.warning(f"Permission denied: role {role} does not have access")
-                return {"message": "Permission denied"}, 403
-            
-            logging.info(f"Successfully authorized with role {role} and token {token}")
-
-            kwargs['admin_token'] = token  # Re-insert the token
-            return f(*args, **kwargs)
-        return decorated_function
-    return decorator
-
-def is_valid_port(port):
-    try:
-        port_num = int(port)
-        return 10000 <= port_num <= 65000
-    except ValueError:
-        return False
-
-#3Proxy config apiment end;
 
 class Reboot(Resource):
     #@requires_role("user")
@@ -133,16 +83,19 @@ class DeviceStatus(Resource):
 
             if serial:
                 # For admin: serial directly provided
-                logging.info(f"Admin checking status for serial: {serial}")
+                logging.info(f"Admin checking status: serial: {serial}")
+                device_id = None
+                device = None
             else:
-                # For regular users: fetch serial from Redis
                 user_data = sm.get_data_from_redis(token)
                 serial = user_data.get('serial')
+                device = user_data.get('device')
                 device_id = user_data.get('id')
+                logging.info(f"User checking status: id{device_id}, serial: {serial}")
 
             if not serial:
-                logging.error("Serial number not found in user data.")
-                return {'error': 'Serial number not found'}, 400
+                logging.error(f"Serial not found in user data: {serial}.")
+                return {'error': 'Serial not found'}, 400
 
             device_status = get_adb_device_status(serial, device_id)
 
@@ -150,7 +103,7 @@ class DeviceStatus(Resource):
                 for i in range(3):
                     status = os_boot_status(serial, device, device_id, enable_modem=False)
                     if status == 'OK':
-                        logging.info(f"Device {serial} is READY!")
+                        #logging.info(f"Device {serial} is READY!")
                         return {'status': 'OK', 'message': 'Device is ready.'}, 200
                     else:
                         logging.warning(f"Device is not ready yet: {status}. Retry {i+1}/3")
@@ -162,20 +115,18 @@ class DeviceStatus(Resource):
                 return {'status': 'seems disconnected', 'message': f'Device is {device_status}'}, 400
         except Exception as e:
             logging.error(f"An error occurred: {e}")
-            return {'error': 'Something went wrong.'}, 500
+            return {f"error: {e}"}, 500
 
 class ChangeIP(Resource):
     def get(self, token):
         try:
             user_data = sm.get_data_from_redis(token)
             serial = user_data.get('serial')
-            logging.info(f"Received request to change IP for serial: {serial}")
+            logging.info(f"Received request: change IP, serial: {serial}")
 
             if not serial:
-                logging.error("Serial number not found in user data.")
-                return {'error': 'Serial number not found'}, 400
-
-            logging.info(f"Received serial number: {serial}")
+                logging.error("Serial not found in user data.")
+                return {'error': 'Serial not found'}, 400
             
             airplane_toggle_cmd(serial)
             return {'status': 'success', 'message': 'IP was changed'}, 200
@@ -236,7 +187,7 @@ class DeleteUser(Resource):
     @requires_role("admin")
     def delete(self, admin_token):
         try:
-            logging.info("Received request to DELETE USER.")
+            logging.info("Received request: DELETE USER.")
 
             data = request.json
             logging.info(f"Got data: {data}")
@@ -264,43 +215,46 @@ class DeleteUser(Resource):
                 logging.error("Invalid proxy_id or token.")
                 return {"message": "Invalid proxy_id or token"}, 400
 
-            logging.info(f"Reading config")
+            #logging.info(f"Reading config")
             lines = cm.read_file(CONFIG_PATH)
-            logging.info(f"Lines: {lines}")
             
-            logging.info(f"Counting username")
+            #logging.info(f"Counting username")
             count_users = cm.user_count_in_ACL(username, proxy_id, lines)
-            logging.info(f"Count username: {count_users}")
+            #logging.info(f"Count username: {count_users}")
 
             if count_users == 1:
-                logging.info(f"Username {username} has only 1 proxy id{proxy_id}, will be removed from ACL")
+                logging.info(f"User has only 1 proxy, removing ACL: {username}, id{proxy_id}")
             elif count_users > 1:
-                logging.warning(f"Username {username} has {count_users} proxy will NOT be removed from ACL")
-
+                logging.warning(f"User has {count_users} proxy, SKIP removing ACL: {username}, id{proxy_id}")
 
             # Remove from configuration
             if not cm.remove_user_config(username, proxy_id):
-                logging.error(f"Failed to remove proxy user: {username} id{proxy_id} from configuration.")
-                return ({f"message": f"Failed to remove proxy user: {username} id{proxy_id} from configuration"}, 500)
+                logging.error(f"Failed to remove user's config: {username}, id{proxy_id}")
+                return ({f"message": f"Failed to remove user's config: {username}, id{proxy_id}"}, 500)
 
             # Remove from ACL
             if count_users == 1:
                 if not cm.remove_user_from_acl(username):
-                    logging.error("Failed to remove user from ACL.")
-                    return {"message": "Failed to remove user from ACL"}, 500
+                    logging.error(f"Failed to remove user from ACL: {username}")
+                    return ({f"message": f"Failed to remove user from ACL: {username}"}, 500)
 
-                logging.info(f"Username {username} was removed from ACL")
+                #logging.info(f"User removed from ACL: {username}")
             elif count_users > 1:
-                logging.info(f"Username {username} has {count_users}, SKIP removing from ACL")
+                logging.info(f"User has {count_users} proxy, SKIP removing ACL: {username}")
             
             # Remove from Redis
             result = sm.delete_from_redis(user_token)
             if not result:
-                logging.error("Token not found in Redis or failed to remove.")
-                return {"message": "Token not found in Redis or failed to remove"}, 404
+                logging.error(f"Token not found in Redis or failed to remove: {user_token}")
+                return ({f"message": f"Token not found in Redis or failed to remove: {user_token}"}, 404)
 
-            logging.info("User deleted successfully.")
-            return {"message": "User deleted successfully"}, 200
+            logging.info(f"User deleted: {username}")
+            return ({f"message": f"User deleted: {username}"}, 200)
+
+        except BadRequest:
+            logging.error("Bad request, possibly malformed JSON.")
+            return {"message": "Invalid JSON format received"}, 400
+
         except Exception as e:
             logging.exception(f"An error occurred: {str(e)}")
             return {"message": "Internal server error"}, 500
@@ -309,7 +263,7 @@ class UpdateAuth(Resource):
     @requires_role("admin")
     def patch(self, admin_token):
         try:
-            logging.info("Received request to UPDATE AUTH.")
+            logging.info("Received request: UPDATE AUTH.")
 
             data = request.json
             if data is None:
@@ -394,7 +348,7 @@ class UpdateMode(Resource):
     @requires_role("admin")
     def post(self, admin_token):
         try:
-            logging.info("Received request to UPDATE MODE.")
+            logging.info("Received request: UPDATE MODE.")
 
             data = request.json
             if data is None:
@@ -443,7 +397,7 @@ class AddUser(Resource):
     @requires_role("admin")
     def post(self, admin_token):
         try:
-            logging.info("Received request to ADD USER.")
+            logging.info("Received request: ADD USER.")
             
             data = request.json
             if data is None:
@@ -465,10 +419,10 @@ class AddUser(Resource):
                 return {"message": "Port numbers should be between 10000 and 65000"}, 400
 
             if sm.serial_exists(user_data['serial']):
-                logging.warning(f"Serial {user_data['serial']} already exists")
-                return {"message": f"Serial {user_data['serial']} already exists"}, 400
+                logging.warning(f"Serial already exists: {user_data['serial']}")
+                return {"message": f"Serial already exists: {user_data['serial']}"}, 400
 
-            logging.info(f"Serial existence in Redis check passed for {user_data['username']}")
+            logging.info(f"Redis check OK: {user_data['username']}")
 
             if user_data.get('id') and not user_data['id'].isdigit():
                 return {"message": "Invalid ID format"}, 400
@@ -494,7 +448,7 @@ class AddUser(Resource):
                     interface_name = f"id{user_data['id']}"
                     ip_address = wait_for_ip(interface_name)
                     if ip_address != '127.0.0.1':
-                        logging.info(f"Modem is already on, its IP: {ip_address}")
+                        logging.info(f"Modem is already on, IP: {ip_address}")
 
                 else:
                     handler = MODEM_HANDLERS.get(user_data['device'], {}).get('on')
@@ -527,17 +481,17 @@ class AddUser(Resource):
             config_result = cm.add_user_config(user_data['username'], user_data['mode'], user_data['parent_ip'], user_data['http_port'], user_data['socks_port'], user_data['id'])
 
             if not acl_result:
-                logging.error(f"Failed to add user {user_data['username']} to ACL. Aborting operation.")
+                logging.error(f"Failed to add user to ACL. Aborting operation.: {user_data['username']}")
                 return {"message": "Failed to add user to ACL"}, 500
             else:
-                logging.info(f"Successfully added user {user_data['username']} to ACL.")
+                logging.info(f"Added user to ACL: {user_data['username']}")
 
             if not config_result:
-                logging.error(f"Failed to add user config for {user_data['username']}. Rolling back ACL.")
+                logging.error(f"Failed to add config. Rolling back ACL.: {user_data['username']}.")
                 cm.remove_user_from_acl(user_data['username'])
                 return {"message": "Failed to add user config. Rolled back ACL"}, 500
             else:
-                logging.info(f"Successfully added user config for {user_data['username']}.")
+                logging.info(f"Added user config: {user_data['username']}.")
 
             data_to_redis = ['serial', 'device', 'mode', 'id']
             data_to_redis_storage = {field: user_data[field] for field in data_to_redis}
@@ -549,10 +503,14 @@ class AddUser(Resource):
                 cm.remove_user_config(user_data['username'], user_data['id'])
                 return {"message": "Failed to store user data to Redis. Rolled back ACL and config"}, 500
             else:
-                logging.info(f"Successfully added data to redis for {user_data['username']} id{user_data['id']}.")
+                logging.info(f"Added data to redis: {user_data['username']}, id{user_data['id']}.")
 
-                logging.info("User added successfully")
-                return {"message": "User added successfully", "token": token}, 201  
+                logging.info(f"User added: {user_data['username']}")
+                return {"message": f"User added: {user_data['username']}, token: {token}"}, 201
+        
+        except BadRequest:
+            logging.error("Bad request, possibly malformed JSON.")
+            return {"message": "Invalid JSON format received"}, 400
 
         except Exception as e:
             logging.error(f"An error occurred: {str(e)}")
@@ -562,7 +520,7 @@ class UpdateUser(Resource):
     @requires_role("admin")
     def patch(self, admin_token):
         try:
-            logging.info("Received request to UPDATE LOGOPASS.")
+            logging.info("Received request: UPDATE LOGOPASS.")
             
             data = request.json
             if data is None:
@@ -627,7 +585,7 @@ class ChangeDevice(Resource):
     @requires_role("admin")
     def patch(self, admin_token):
         try:
-            logging.info("Received request to CHANGE DEVICE.")
+            logging.info("Received request: CHANGE DEVICE.")
             
             data = request.json
             if data is None:
@@ -671,7 +629,7 @@ class ProxyCount(Resource):
         cursor = None
 
         try:
-            logging.info("Received request to GET PROXY COUNT.")
+            logging.info("Received request: GET PROXY COUNT.")
 
             logging.info("Attempting to connect to MySQL...")
             connection = sm.connect_to_mysql()
@@ -710,7 +668,7 @@ class ModemStatus(Resource):
     @requires_role("admin")
     def get(self, admin_token, serial, device_model):
         try:
-            logging.info("Received request to CHECK MODEM STATUS.")
+            logging.info("Received request: CHECK MODEM STATUS.")
 
             handler = MODEM_HANDLERS.get(device_model, {}).get('status')
             if not handler:

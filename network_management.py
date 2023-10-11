@@ -11,9 +11,9 @@ load_dotenv()
 
 from settings import TETHERING_COORDINATES
 
-AIRPLANE_ON_CMD = "su -c 'settings put global airplane_mode_on 1; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true'"
-AIRPLANE_OFF_CMD = "su -c 'settings put global airplane_mode_on 0; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false'"
-WIFI_STATUS_CMD = "adb -s {} shell dumpsys wifi | grep 'mNetworkInfo'"
+AIRPLANE_ON_CMD = os.getenv('AIRPLANE_ON_CMD')
+AIRPLANE_OFF_CMD = os.getenv('AIRPLANE_OFF_CMD')
+WIFI_STATUS_CMD = os.getenv('WIFI_STATUS_CMD')
 
 def generate_command(serial, coordinates):
     x, y = coordinates
@@ -64,7 +64,7 @@ def modem_toggle_cmd(serial, mode):
         logging.error(f"An unexpected error occurred: {e}, serial: {serial}")
 
 def modem_get_status(serial, device_type='any'):
-    logging.info(f"Checking modem status for serial: {serial}, device model: {device_type}")
+    logging.info(f"Checking modem status: serial: {serial}, device model: {device_type}")
 
     # Базовая команда для запроса статуса модема
     base_command = f"adb -s {serial} shell svc usb getFunction"
@@ -77,21 +77,19 @@ def modem_get_status(serial, device_type='any'):
     try:
         stdout, stderr = process.communicate(timeout=10)  # 10 секунд таймаут
         error = stderr.decode()
-        #logging.info(f"Received stdout: {stdout.decode()}")
-        logging.error(f"Received stderr: {error}")
 
         if f"device '{serial}' not found" in error:
-            logging.error(f"Device {serial} not found")
+            logging.error(f"Device not found: serial {serial} ")
             return "device_not_found"
         elif "rndis" in error:
-            logging.info(f"Device {serial} is in rndis mode")
+            logging.info(f"Device to RNDIS OK: serial {serial}")
             return "rndis"
         else:
-            logging.info(f"Device {serial} is NOT in rndis mode")
+            logging.info(f"Device is NOT in RNDIS: serial {serial}")
             return "rndis_off"
     except TimeoutExpired:
         process.kill()
-        logging.error(f"Timeout during modem status check for device {serial}")
+        logging.error(f"Timeout modem status checking: serial {serial}")
         return "timeout"
 
 MODEM_HANDLERS = {
@@ -114,14 +112,14 @@ MODEM_HANDLERS = {
 
 def airplane_toggle_cmd(serial, delay=1):
     try:
-        logging.info(f"Toggling airplane mode for device {serial}")
+        logging.info(f"Toggling airplane mode: serial: {serial}")
         adb_command = f"adb -s {serial} shell"
         child = pexpect.spawn(adb_command)
         child.expect('\$', timeout=10)
 
         # Turn airplane mode ON
         airplane_on_command = AIRPLANE_ON_CMD
-        logging.info(f"Executing airplane ON command: {airplane_on_command}")
+        logging.info(f"Executing airplane ON: serial: {serial}") #: {airplane_on_command}")
         child.sendline(airplane_on_command)
         child.expect_exact('Broadcast completed: result=0', timeout=10)
         
@@ -130,11 +128,11 @@ def airplane_toggle_cmd(serial, delay=1):
 
         # Turn airplane mode OFF
         airplane_off_command = AIRPLANE_OFF_CMD
-        logging.info(f"Executing airplane OFF command: {airplane_off_command}")
+        logging.info(f"Executing airplane OFF: serial: {serial}") # command": {airplane_off_command}")
         child.sendline(airplane_off_command)
         child.expect_exact('Broadcast completed: result=0', timeout=10)
 
-        logging.info("Airplane mode toggled and exiting shell.")
+        logging.info(f"Airplane mode toggled: serial {serial}")
         child.sendline('exit')
         child.close()
 
@@ -187,14 +185,14 @@ def toggle_wifi(serial, action, delay=1, max_retries=10):
 def get_ip_address(interface_name):
     try:
         ip_address = ni.ifaddresses(interface_name)[ni.AF_INET][0]['addr']
-        logging.info(f"Interface {interface_name}: IP address obtained - {ip_address}")
+        logging.info(f"IP address obtained: {interface_name} - {ip_address}")
         return ip_address
     except Exception as e:
         logging.error(f"Couldn't fetch IP for interface {interface_name}: {str(e)}")
         return '127.0.0.1'
 
 def wait_for_ip(interface_name, retries=5, delay=3):
-    logging.info(f"Waiting for IP on interface {interface_name} with {retries} retries and {delay}s delay")
+    logging.info(f"Waiting for IP with {retries} retries and {delay}s delay: {interface_name}")
     for i in range(retries):
         ip = get_ip_address(interface_name)
         if ip != '127.0.0.1':
@@ -205,3 +203,27 @@ def wait_for_ip(interface_name, retries=5, delay=3):
 
     logging.error(f"Exceeded max retries for getting IP on interface {interface_name}")
     return '127.0.0.1'
+
+def enable_modem(serial, device_model, device_id):
+    try:
+        logging.info(f"RNDIS is trying get up, ID: {device_id}, serial: {serial}, type: {device_model}")
+        
+        for attempt in range(40):  # Maximum number of reboot status checks         
+            if status == "OK":
+                logging.info(f"Removed job ID: {job_id}, for ID: {device_id}, serial: {serial}")
+                break
+            time.sleep(10)  # Waiting time between attempts
+        else:
+            logging.warning(f"Device ID: {device_id}, serial: {serial} did not reboot successfully after 40 attempts")
+            #logging.info(f"Removed job ID {job_id}, reboot unsuccessful for ID: {device_id}, serial: {serial}")
+            return
+
+        if device_model not in MODEM_HANDLERS:
+            logging.error(f"Unknown device model: {device_model}. Can't reestablish rndis for ID: {device_id}, serial: {serial}")
+            return
+
+        MODEM_HANDLERS[device_model]['on'](serial)
+        logging.info(f"Modem turned on for ID: {device_id}, serial: {serial}")
+
+    except Exception as e:
+        logging.error(f"An error occurred while reestablishing rndis: {e}, for ID: {device_id}, serial: {serial}")

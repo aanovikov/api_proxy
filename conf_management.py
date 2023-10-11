@@ -1,6 +1,13 @@
 from textwrap import dedent
 import logging
 import re
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+ACL_PATH = os.getenv('ACL_PATH')
+CONFIG_PATH = os.getenv('CONFIG_PATH')
 
 def read_file(filepath):
     try:
@@ -12,10 +19,10 @@ def read_file(filepath):
 
 def write_file(filepath, data):
     try:
-        logging.info(f"Writing to file at {filepath}")
+        #logging.info(f"Writing to file at {filepath}")
         with open(filepath, 'w') as file:
             file.writelines(data)
-            logging.info(f"Successfully wrote to file at: {filepath}")
+            #logging.info(f"Successfully wrote to file at: {filepath}")
         return True
     except Exception as e:
         logging.error(f"Can't write to the file: {filepath}: {str(e)}")
@@ -23,18 +30,18 @@ def write_file(filepath, data):
 
 def add_user_to_acl(username, password):
     try:
-        logging.info(f"Attempting to add user {username} to ACL.")
+        #logging.info(f"Adding user to ACL: {username}.")
         with open(ACL_PATH, 'a') as file:
             file.write(f"{username}:CL:{password}\n")
-        logging.info(f"User {username} successfully added to ACL.")
+        logging.info(f"Added ACL: {username}")
         return True
     except Exception as e:
-        logging.error(f"Failed to add user {username} to ACL: {str(e)}")
+        logging.error(f"Failed to ACL: {username}, error: {str(e)}")
         return False
 
 def remove_user_from_acl(username):
     try:
-        logging.info(f"Attempting to remove user {username} from ACL.")
+        logging.info(f"Removing user ACL: {username}")
         lines = read_file(ACL_PATH)
 
         if lines is None:
@@ -43,17 +50,17 @@ def remove_user_from_acl(username):
         updated_lines = [line for line in lines if username not in line]
 
         if len(lines) == len(updated_lines):
-            logging.warning(f"??User {username} not found in ACL")
+            logging.warning(f"User's ACL not found: {username}")
             return False
 
         if write_file(ACL_PATH, updated_lines):
-            logging.info(f"User {username} successfully removed from ACL")
+            logging.info(f"User's ACL removed: {username} ")
             return True
         else:
             return False
 
     except Exception as e:
-        logging.error(f"An error occurred while removing user {username} from ACL: {str(e)}")
+        logging.error(f"An error occurred while removing user ACL: {username}, error: {str(e)}")
         return False
 
 def update_user_in_acl(old_username, new_username, old_password, new_password):
@@ -128,7 +135,7 @@ def update_user_in_acl(old_username, new_username, old_password, new_password):
 
 def write_config_to_file(config):
     try:
-        logging.info("Attempting to write config to file.")
+        #logging.info("Attempting to write config to file.")
         
         content = read_file(CONFIG_PATH)
         if content is None:
@@ -145,7 +152,7 @@ def write_config_to_file(config):
             logging.error("Failed to write to config file")
             return False
 
-        logging.info("Config successfully written to file.")
+        logging.info(f"Config successfully written to {CONFIG_PATH}")
         return True
     except Exception as e:
         logging.error(f"Failed to write config to file: {str(e)}")
@@ -153,7 +160,7 @@ def write_config_to_file(config):
 
 def add_user_config(username, mode, parent_ip, http_port, socks_port, id):
     try:
-        logging.info(f"Attempting to add config for device id{id}.")
+        #logging.info(f"Attempting to add config: id{id}.")
         ifname = id  # Interface name
 
         # Common parts for HTTP and SOCKS
@@ -218,7 +225,7 @@ def add_user_config(username, mode, parent_ip, http_port, socks_port, id):
         if not write_result:
             raise IOError("Failed to write user config to file.")
         
-        logging.info(f"Successfully added config for id{id}")
+        logging.info(f"Added CONFIG: id{id}")
         return True
 
     except ValueError as ve:
@@ -233,7 +240,7 @@ def add_user_config(username, mode, parent_ip, http_port, socks_port, id):
 
 def remove_user_config(username, proxy_id):
     try:
-        logging.info(f"Attempting to remove config for proxy id{proxy_id}.")
+        logging.info(f"Removing config: id{proxy_id}")
         lines = read_file(CONFIG_PATH)
         if lines is None:
             logging.error("Failed to read config file")
@@ -264,7 +271,7 @@ def remove_user_config(username, proxy_id):
             return False
 
         if user_removed:
-            logging.info(f"User {username} successfully removed from config")
+            logging.info(f"User's config removed: {username}")
             return True
         else:
             logging.warning(f"User {username} not found in config")
@@ -314,10 +321,10 @@ def username_exists_in_ACL(username):
         for line in lines:
             parts = line.split(":")
             if len(parts) > 1 and username == parts[0]:
-                logging.info(f"Username {username} exists in ACL.")
+                #logging.info(f"Username exists in ACL: {username}")
                 return True
 
-        logging.warning(f"Username {username} does not exist in ACL.")
+        logging.warning(f"Username doesn't exist in ACL: {username} .")
         return False
 
     except Exception as e:
@@ -334,10 +341,10 @@ def password_exists_in_ACL(password):
         for line in lines:
             parts = line.split(":")
             if len(parts) > 1 and password == parts[2].strip():
-                logging.info(f"Password {password} exists in ACL.")
+                logging.info(f"Password exists in ACL: {password}")
                 return True
 
-        logging.warning(f"Password {password} does not exist in ACL.")
+        logging.warning(f"Password doesn't exist in ACL: {password}")
         return False
     except Exception as e:
         logging.error(f"An error occurred while checking if user exists: {str(e)}")

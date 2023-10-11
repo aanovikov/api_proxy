@@ -3,7 +3,7 @@ import subprocess
 from subprocess import Popen, PIPE, TimeoutExpired, run
 import time
 from network_management import MODEM_HANDLERS
-from schedule_management import scheduler
+from tools import scheduler
 
 def adb_reboot_device(serial, device_id):
     adb_reboot = f"adb -s {serial} reboot"
@@ -38,7 +38,7 @@ def get_adb_device_status(serial, device_id):
 
 def os_boot_status(serial, device, device_id, enable_modem=False):
     adb_get_boot_completed = f"adb -s {serial} shell getprop sys.boot_completed"
-    logging.info(f"OS BOOT checking for ID: {device_id}, serial: {serial}")
+    logging.info(f"OS BOOT checking: id{device_id}, serial: {serial}")
     consecutive_ok = 0  # счетчик подтверждений
 
     for _ in range(3):  # три попытки подтверждения
@@ -54,10 +54,10 @@ def os_boot_status(serial, device, device_id, enable_modem=False):
                 consecutive_ok = 0  # сбрасываем счетчик
 
             if consecutive_ok == 3:
-                logging.info(f"Device is ONLINE, ID: {device_id}, serial: {serial}")
+                logging.info(f"Device is READY: id{device_id}, serial: {serial}")
                 if enable_modem:
                     MODEM_HANDLERS[device]['on'](serial)
-                    logging.info(f"Modem turned on for ID: {device_id}, serial: {serial}")  # Вызываем функцию для включения режима модема
+                    logging.info(f"Modem turned on: id{device_id}, serial: {serial}")  # Вызываем функцию для включения режима модема
                     scheduler.remove_job(f"modem_{serial}")
                 return 'OK'
 

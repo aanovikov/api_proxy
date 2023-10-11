@@ -46,10 +46,10 @@ def store_to_redis(data, token):
             return False
 
         if not r.hset(token, mapping=data):
-            logging.error(f"Failed to store data for token {token}")
+            logging.error(f"Failed to store data for token: {token}")
             return False
 
-        logging.info(f"Successfully stored data for token {token}")
+        logging.info(f"Stored data for token: {token}")
         return True
         
     except redis.ConnectionError:
@@ -78,7 +78,7 @@ def update_data_in_redis(token, field, value):
 
 def delete_from_redis(token):
     try:
-        logging.info(f"Deleting token: {token} from Redis")
+        logging.info(f"Deleting Redis token: {token}")
 
         r = connect_to_redis()
 
@@ -86,10 +86,10 @@ def delete_from_redis(token):
         result = r.delete(token)
 
         if result == 1:
-            logging.info(f"The key {token} has been deleted successfully.")
+            logging.info(f"Redis token deleted: {token}")
             return True
         else:
-            logging.warning(f"The key {token} does not exist.")
+            logging.warning(f"Redis token doesn't exist: {token}")
             return False
 
     except Exception as e:
