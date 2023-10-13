@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from device_management import adb_reboot_device, get_adb_device_status, os_boot_status
 from network_management import airplane_toggle_cmd, MODEM_HANDLERS, wait_for_ip, enable_modem
 from settings import TETHERING_COORDINATES, ALLOWED_PROTOCOLS
-from tools import schedule_job, generate_short_token, requires_role, is_valid_port
+from tools import schedule_job, generate_short_token, requires_role, is_valid_port, scheduler
 import storage_management as sm
 import conf_management as cm
 
@@ -25,7 +25,7 @@ load_dotenv()
 #config_lock = Lock()
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
@@ -115,7 +115,7 @@ class DeviceStatus(Resource):
                 return {'status': 'seems disconnected', 'message': f'Device is {device_status}'}, 400
         except Exception as e:
             logging.error(f"An error occurred: {e}")
-            return {f"error: {e}"}, 500
+            return {"error": str(e)}, 500
 
 class ChangeIP(Resource):
     def get(self, token):
@@ -140,6 +140,7 @@ class AutoChangeIP(Resource):
         try:
             user_data = sm.get_data_from_redis(token)
             serial = user_data.get('serial')
+            device_id = user_data.get('id')
             
             if not serial:
                 logging.error("Serial number not found in user data.")
@@ -154,11 +155,11 @@ class AutoChangeIP(Resource):
             if interval_minutes == '0':
                 try:
                     scheduler.remove_job(job_id)
-                    logging.info(f"Scheduled IP changes for device {token} have been cancelled.")
-                    return {'status': 'success', 'message': f'Scheduled IP changes for device {token} have been cancelled.'}, 200
+                    logging.info(f"Cancelled scheduled IP changes: id{device_id}, serial {serial}, token: {token}")
+                    return {'status': 'success', 'message': f'Cancelled scheduled IP changes for device: {token}'}, 200
                 except Exception as e:
                     logging.error(f"Error occurred while cancelling scheduled job: {str(e)}")
-                    return {'status': 'failure', 'message': str(e)}, 500
+                    return {'status': 'failure', 'message': "Message to support"}, 500
 
             # Schedule a new job
             else:
@@ -295,7 +296,7 @@ class UpdateAuth(Resource):
                 logging.error("Missing required field: allow_ip.")
                 return {"message": "Missing required field: allow_ip"}, 400
 
-            logging.info(f"Received DATA ID: {proxy_id}, Username: {username}, Protocol: {protocol}, New Auth Type: {auth_type}, Allow ip: {allow_ip}")
+            logging.info(f"Received DATA: id{proxy_id}, Username: {username}, Protocol: {protocol}, New Auth Type: {auth_type}, Allow ip: {allow_ip}")
 
             if protocol not in ALLOWED_PROTOCOLS:
                 logging.error("Invalid protocol provided.")
@@ -366,19 +367,19 @@ class UpdateMode(Resource):
             http_port = int(data.get('http_port'))
             socks_port = int(data.get('socks_port'))
 
-            if new_mode not in ['parent', 'modem']:
-                logging.warning("Invalid mode. Use either 'parent' or 'modem'")
-                return {"message": "Invalid mode. Use either 'parent' or 'modem'"}, 400
+            if new_mode not in ['android', 'modem']:
+                logging.warning("Invalid mode. Use either 'android' or 'modem'")
+                return {"message": "Invalid mode. Use either 'android' or 'modem'"}, 400
 
             # Проверка корректности parent_ip
-            if new_mode == 'parent':
+            if new_mode == 'android':
                 try:
                     ip_address(parent_ip)
                 except AddressValueError:
                     logging.warning("Invalid parent IP address")
                     return {"message": "Invalid parent IP address. Should be a valid IPv4 or IPv6 address."}, 400
 
-            logging.debug(f"Got device_token: {device_token}, new_mode: {new_mode}, parent_ip: {parent_ip}, http_port: {http_port}, socks_port: {socks_port}")
+            logging.debug(f"Got: device_token: {device_token}, new_mode: {new_mode}, parent_ip: {parent_ip}, http_port: {http_port}, socks_port: {socks_port}")
 
             if not (10000 <= http_port <= 65000 and 10000 <= socks_port <= 65000):
                 logging.warning("Port numbers out of allowed range")
@@ -391,7 +392,7 @@ class UpdateMode(Resource):
             
         except Exception as e:
             logging.error(f"An error occurred: {str(e)}")
-            return {"message": "Internal server error"}, 500
+            return {"message": f"Internal server error: {str(e)}"}, 500
 
 class AddUser(Resource):
     @requires_role("admin")
@@ -493,7 +494,7 @@ class AddUser(Resource):
             else:
                 logging.info(f"Added user config: {user_data['username']}.")
 
-            data_to_redis = ['serial', 'device', 'mode', 'id']
+            data_to_redis = ['serial', 'device', 'mode', 'id', 'username']
             data_to_redis_storage = {field: user_data[field] for field in data_to_redis}
             redis_result = sm.store_to_redis(data_to_redis_storage, token)
 
@@ -548,11 +549,11 @@ class UpdateUser(Resource):
                     logging.error(f"User {old_username} does not exist")
                     return {"message": f"User {old_username} does not exist"}, 404
 
-                if not cm.update_user_in_acl(old_username, new_username, old_password, new_password) or \
+                if not cm.update_user_in_acl(old_username, new_username, old_password, new_password, proxy_id) or \
                         not cm.update_user_in_config(old_username, new_username, proxy_id):
                     raise Exception("Failed to update username")
 
-                logging.info(f"Username updated successfully")
+                logging.debug(f"Username updated: {old_username} --> {new_username}, {old_password} --> {new_password} ")
                 return {"message": "Username updated successfully"}, 200
 
             if update_password:
@@ -561,7 +562,7 @@ class UpdateUser(Resource):
                     logging.error(f"USER with password {old_password} does not exist")
                     return {"UpdateUser": "User with password does not exist"}, 404
 
-                if not cm.update_user_in_acl(old_username, new_username, old_password, new_password) or \
+                if not cm.update_user_in_acl(old_username, new_username, old_password, new_password, proxy_id) or \
                         not cm.update_user_in_config(old_username, new_username, proxy_id):
                     raise Exception("Failed to update password")
                 

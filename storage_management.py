@@ -67,14 +67,15 @@ def get_data_from_redis(token):
     all_values = r.hgetall(token)
     if not all_values:
         logging.error(f"No data found for token {token}")
-        traceback.print_stack()
+        #traceback.print_stack()
         raise Exception(f"No data found for token {token}")
     return {k.decode('utf-8'): v.decode('utf-8') for k, v in all_values.items()}
 
-def update_data_in_redis(token, field, value):
+def update_data_in_redis(token, fields):
     r = connect_to_redis()
-    r.hset(token, field, value)
-    logging.info(f"Updated data for token {token}: {field} = {value}")
+    for field, value in fields.items():
+        r.hset(token, field, value)
+        logging.info(f"Updated data: token: {token}, NEW {field} = {value}")
 
 def delete_from_redis(token):
     try:

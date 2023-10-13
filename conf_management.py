@@ -3,6 +3,7 @@ import logging
 import re
 import os
 from dotenv import load_dotenv
+import storage_management as sm
 
 load_dotenv()
 
@@ -63,41 +64,41 @@ def remove_user_from_acl(username):
         logging.error(f"An error occurred while removing user ACL: {username}, error: {str(e)}")
         return False
 
-def update_user_in_acl(old_username, new_username, old_password, new_password):
+def update_user_in_acl(old_username, new_username, old_password, new_password, proxy_id):
     try:
-        logging.info(f"Attempting to update user in ACL: old_username={old_username}, new_username={new_username}, old_password={old_password}, new_password={new_password}")
+        logging.info(f"Updating user in ACL: id{proxy_id}: {old_username} --> {new_username}, {old_password} --> {new_password}")
 
         users = read_file(ACL_PATH)
         if users is None:
             logging.error("Failed to read ACL file")
             return False
 
-        logging.info(f"Current ACL: {users}")
+        logging.debug(f"Current ACL: {users}")
 
         updated_users = []
         user_found = False
         
         if old_username and new_username and old_password and new_password: # change logopass
             for user in users:
-                logging.info(f"Checking logopass line: {user.strip()}")
+                logging.debug(f"Checking logopass line: {user.strip()}")
                 if re.match(f"^{old_username}:CL:{old_password}", user):
                     new_user_line = f"{new_username}:CL:{new_password}\n"
                     updated_users.append(new_user_line)
-                    logging.info(f"Updated users so far: {updated_users}")
+                    logging.debug(f"Updated users so far: {updated_users}")
                     user_found = True
-                    logging.info(f"Username and Password match found. Updated line: {new_user_line.strip()}")
+                    logging.debug(f"LOGOPASS match found. Updated line: {new_user_line.strip()}")
                 else:
                     updated_users.append(user)
 
         elif old_username and new_username: # change only username
             for user in users:
-                logging.info(f"Checking user line: {user.strip()}")
+                logging.debug(f"Checking logopass line: {user.strip()}")
                 if re.match(f"^{old_username}:CL:", user):
                     new_user_line = f"{new_username}{user[len(old_username):]}"
                     updated_users.append(new_user_line)
-                    logging.info(f"Updated users so far: {updated_users}")
+                    logging.debug(f"Updated users so far: {updated_users}")
                     user_found = True
-                    logging.info(f"Username match found. Updated line: {new_user_line.strip()}")
+                    logging.debug(f"LOGOPASS match found. Updated line: {new_user_line.strip()}")
                 else:
                     updated_users.append(user)
 
@@ -118,16 +119,16 @@ def update_user_in_acl(old_username, new_username, old_password, new_password):
             updated_users = users
 
         if not user_found:
-            logging.warning(f"User {old_username if old_username else old_password} not found in ACL")
+            logging.warning(f"User not found in ACL: id{proxy_id}: {old_username if old_username else old_password}")
             updated_users = []
             return False
 
-        logging.info(f"Attempting to write to file with updated_users: {updated_users}")
+        logging.debug(f"Attempting to write to file with updated_users: {updated_users}")
         if not write_file(ACL_PATH, updated_users):
             logging.error("Failed to write to ACL file")
             return False
 
-        logging.info(f"User {old_username if old_username else old_password} successfully updated to {new_username if new_username else new_password} in ACL")
+        logging.info(f"Updated LOGOPASS in ACL: id{proxy_id}: {old_username if old_username else old_password} --> {new_username if new_username else new_password}")
         return True
     except Exception as e:
         logging.error(f"An error occurred while updating user in ACL: {str(e)}")
@@ -304,7 +305,7 @@ def update_user_in_config(old_username, new_username, proxy_id):
             logging.error("Failed to write new config")
             return False
 
-        logging.info(f"User {old_username} successfully updated to {new_username} in config")
+        logging.info(f"Updated user's config: id{proxy_id}: {old_username} --> {new_username}")
         return True
 
     except Exception as e:
@@ -369,7 +370,7 @@ def update_auth_in_config(proxy_id, username, protocol, auth_type, allow_ip):
         end_tag = f"# End {protocol} for {username} id{proxy_id}"
 
         search_pattern = f"# Start {protocol} for {username} id{proxy_id}"
-        logging.info(search_pattern)
+        #logging.info(search_pattern)
         id_exists_in_config_result = id_exists_in_config(search_pattern, proxy_id, username)
 
         if not id_exists_in_config_result:
@@ -405,77 +406,91 @@ def update_auth_in_config(proxy_id, username, protocol, auth_type, allow_ip):
             logging.error("Failed to write new config")
             return False, "Failed to write new config"
 
-        logging.info(f"User configuration updated successfully for {username}.")
+        logging.info(f"Config updated: protocol: {protocol}, username: {username}, id{proxy_id}")
         return True, "Auth type updated"
     except Exception as e:
         logging.error(f"An error occurred while updating auth in config: {str(e)}")
         return False, "An error occurred"
 
 def update_mode_in_config(new_mode, parent_ip, device_token, http_port, socks_port):
-    logging.info(f"Starting to update mode in config with new_mode: {new_mode}, parent_ip: {parent_ip}, device_token: {device_token}")
+    try:
+        logging.info(f"Updating MODE in config: new_mode: {new_mode}, parent_ip: {parent_ip}, device_token: {device_token}")
 
-    device_data = get_data_from_redis(device_token)
-    current_mode = device_data.get('mode')
-    device_id = device_data.get('id')
-    username = device_data.get('username')
+        device_data = sm.get_data_from_redis(device_token)
+        if not device_data:
+            logging.error(f"No data for token: {device_token}. Exiting.")
+            return {"message": f"No data for token: {device_token}", "status_code": 500}
 
-    logging.debug(f"Current device_id: {device_id}, current_mode: {current_mode}")
+        current_mode = device_data.get('mode', '')
+        device_id = device_data.get('id', '')
+        username = device_data.get('username', '')
 
-    if str(new_mode) == str(current_mode):
-        logging.info(f"Mode for device {device_id} is already set to {new_mode}. Exiting.")
-        return {"message": f"Mode for device {device_id} is already set to {new_mode}", "status_code": 200}
+        logging.debug(f"Current device_id: {device_id}, current_mode: {current_mode}, USER: {username}")
 
-    new_lines = []
-    inside_user_block = False
+        if str(new_mode) == str(current_mode):
+            logging.info(f"Mode for device id{device_id} is already set to {new_mode}. Exiting.")
+            return {"message": f"Mode for device id{device_id} is already set to {new_mode}", "status_code": 200}
 
-    logging.info(f"Ports info - http_port: {http_port}, socks_port: {socks_port}")
+        new_lines = []
+        inside_user_block = False
 
-    with open(CONFIG_PATH, "r") as f:
-        lines = f.readlines()
+        logging.debug(f"Ports info: HTTP: {http_port}, SOCKS: {socks_port}")
 
-    for line in lines:
-        new_line = line.strip()
+        with open(CONFIG_PATH, "r") as f:
+            lines = f.readlines()
 
-        if f"# Start http for {username}" in line:
-            inside_user_block = True
-            logging.debug(f"Entering user block for {username}")
+        for line in lines:
+            new_line = line.strip()
+            logging.debug(f"NEWLINE: {new_line}")
 
-        if f"# End socks for {username}" in line:
-            inside_user_block = False
-            logging.debug(f"Exiting user block for {username}")
+            if f"# Start http for {username} id{device_id}" in line.strip():
+                inside_user_block = True
+                logging.debug(f"Entering user block: {username}, id{device_id}")
 
-        if inside_user_block:
-            if new_mode == 'modem':
-                if 'parent' in line:
-                    continue  # Просто пропустим эту строку, и она не попадет в новый конфиг
-                elif 'proxy -n -a -p' in line:
-                    new_line = re.sub(r'-p\d+', f'-p{http_port}', line)
-                    new_line = new_line.rstrip() + f' -e$"/etc/3proxy/modem_ip/{device_id}"\n'
-                elif 'socks -n -a -p' in line:
-                    new_line = re.sub(r'-p\d+', f'-p{socks_port}', line)
-                    new_line = new_line.rstrip() + f' -e$"/etc/3proxy/modem_ip/{device_id}"\n'
-            elif new_mode == 'parent':
-                if 'proxy -n -a -p' in line:
-                    new_lines.append(f'parent 1000 http {parent_ip} 8080 android android\n')
-                    new_line = re.sub(r'-p\d+', f'-p{http_port}', line).strip()
-                    new_line = re.sub(r' -e\$\"/etc/3proxy/modem_ip/\w+\"', '', new_line)
-                elif 'socks -n -a -p' in line:
-                    new_lines.append(f'parent 1000 socks5 {parent_ip} 8080 android android\n')
-                    new_line = re.sub(r'-p\d+', f'-p{socks_port}', line).strip()
-                    new_line = re.sub(r' -e\$\"/etc/3proxy/modem_ip/\w+\"', '', new_line)
+            if f"# End socks for {username} id{device_id}" in line.strip():
+                inside_user_block = False
+                logging.debug(f"Exiting user block: {username}, id{device_id}")
 
-        if new_line:
-            new_lines.append(new_line.strip() + '\n')  # Добавляем новую строку, если она не пуста
+            if inside_user_block:
+                logging.debug(f"Processing line within user block: {line.strip()}")
 
-    with open(CONFIG_PATH, "w") as f:
-        f.writelines(new_lines)
+                if new_mode == 'modem':
+                    if 'parent' in line.strip():
+                        logging.debug("Skipping 'parent' line for 'modem' mode.")
+                        continue  # Просто пропустим эту строку, и она не попадет в новый конфиг
+                    elif 'proxy -n -a -p' in line.strip():
+                        new_line = re.sub(r'-p\d+', f'-p{http_port}', line)
+                        new_line = new_line.rstrip() + f' -Doid{device_id}\n'
+                    elif 'socks -n -a -p' in line.strip():
+                        new_line = re.sub(r'-p\d+', f'-p{socks_port}', line)
+                        new_line = new_line.rstrip() + f' -Doid{device_id}\n'
 
-    # Обновляем значение в Redis
-    update_data_in_redis(device_token, 'mode', new_mode)
+                elif new_mode == 'android':
+                    if 'proxy -n -a -p' in line.strip():
+                        new_lines.append(f'parent 1000 http {parent_ip} 8080 android android\n')
+                        new_line = re.sub(r'-p\d+', f'-p{http_port}', line).strip()
+                        new_line = re.sub(r' -Doid\w+', '', new_line)
+                    elif 'socks -n -a -p' in line.strip():
+                        new_lines.append(f'parent 1000 socks5 {parent_ip} 8080 android android\n')
+                        new_line = re.sub(r'-p\d+', f'-p{socks_port}', line).strip()
+                        new_line = re.sub(r' -Doid\w+', '', new_line)
 
-    logging.info(f"Mode for device {device_id} has been changed to {new_mode}")
-    response = f"Mode for device {device_id} has been changed to {new_mode}"
-    return {"message": f"Mode for device {device_id} has been changed to {new_mode}", "status_code": 200}
+            if new_line:
+                logging.debug(f"Appending new line: {new_line}")
+                new_lines.append(new_line.strip() + '\n')  # Добавляем новую строку, если она не пуста
+
+        with open(CONFIG_PATH, "w") as f:
+            f.writelines(new_lines)
+
+        # Обновляем значение в Redis
+        sm.update_data_in_redis(device_token, {'mode': new_mode, 'username': username})
+
+        logging.info(f"Mode changed: id{device_id}, mode = {new_mode}")
+        return {"message": f"Mode changed: id{device_id}, mode = {new_mode}", "status_code": 200}
+
+    except Exception as e:
+        logging.error(f"An error occurred: {e}")
+        return {"message": f"An error occurred: {e}", "status_code": 500}
 
 def ip_exists_in_config(ip_address):
     try:
@@ -523,10 +538,10 @@ def id_exists_in_config(search_pattern, proxy_id, username):
 
         #search_pattern = f'-Doid{id}'
         if search_pattern in ''.join(content):
-            logging.info(f"Config for user <{username}> ID {proxy_id} exists in the configuration.")
+            #logging.info(f"Config exists: username: {username}, id{proxy_id}")
             return True
 
-        #logging.info(f"ID {id} does not exist in the configuration.")
+        logging.info(f"Config DOES NOT exist: username: {username}, id{proxy_id}")
         return False
 
     except Exception as e:
@@ -540,8 +555,8 @@ def change_id_in_config(old_id, new_id):
             logging.error("An error occurred while reading the config file.")
             return False
 
-        search_string = f'-e$"/etc/3proxy/modem_ip/{old_id}"'
-        updated_content = ''.join(content).replace(search_string, f'-e$"/etc/3proxy/modem_ip/{new_id}"')
+        search_string = f'-Doid{old_id}"'
+        updated_content = ''.join(content).replace(search_string, f'-Doid{new_id}"')
 
         if write_file(CONFIG_PATH, updated_content):
             logging.info(f"Changed ID from {old_id} to {new_id} in the configuration.")
