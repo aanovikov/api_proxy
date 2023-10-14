@@ -352,6 +352,8 @@ def reestablish_rndis_after_reboot(serial_number, device_type, device_id):
             return
 
         # After reboot, enable rndis mode for the device
+        logging.info("PAUSE 5 SEC BEFORE TURN RNDIS ON")
+        time.sleep(5)
         logging.info(f"Turning on rndis for {serial_number} of type {device_type}")
         MODEM_HANDLERS[device_type]['on'](serial_number)
         logging.info(f"Modem turned on for id{device_id}")
