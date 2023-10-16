@@ -7,13 +7,11 @@ from dotenv import load_dotenv
 import os
 import time
 
-load_dotenv()
-
 from settings import TETHERING_COORDINATES
 
-AIRPLANE_ON_CMD = os.getenv('AIRPLANE_ON_CMD')
-AIRPLANE_OFF_CMD = os.getenv('AIRPLANE_OFF_CMD')
-WIFI_STATUS_CMD = os.getenv('WIFI_STATUS_CMD')
+AIRPLANE_ON_CMD = "su -c 'settings put global airplane_mode_on 1; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true'"
+AIRPLANE_OFF_CMD = "su -c 'settings put global airplane_mode_on 0; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false'"
+WIFI_STATUS_CMD = "adb -s {} shell dumpsys wifi | grep 'mNetworkInfo'"
 
 def generate_command(serial, coordinates):
     x, y = coordinates

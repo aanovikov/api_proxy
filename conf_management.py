@@ -44,18 +44,25 @@ def remove_user_from_acl(username):
     try:
         logging.info(f"Removing user ACL: {username}")
         lines = read_file(ACL_PATH)
+        logging.debug(lines)
 
         if lines is None:
             return False
 
-        updated_lines = [line for line in lines if username not in line]
+        found = False
+        for index, line in enumerate(lines):
+            logging.debug(f'index: {index}, line: {line.strip()}')
+            if line.strip().startswith(f"{username}:"):
+                del lines[index]
+                found = True
+                break
 
-        if len(lines) == len(updated_lines):
+        if not found:
             logging.warning(f"User's ACL not found: {username}")
             return False
 
-        if write_file(ACL_PATH, updated_lines):
-            logging.info(f"User's ACL removed: {username} ")
+        if write_file(ACL_PATH, lines):
+            logging.info(f"User's ACL removed: {username}")
             return True
         else:
             return False
@@ -483,7 +490,9 @@ def update_mode_in_config(new_mode, parent_ip, device_token, http_port, socks_po
             f.writelines(new_lines)
 
         # Обновляем значение в Redis
-        sm.update_data_in_redis(device_token, {'mode': new_mode, 'username': username})
+        if not sm.update_data_in_redis(device_token, {'mode': new_mode, 'username': username}):
+            logging.error(f"Failed to update data in Redis: {device_token}, {'new_mode': new_mode, 'username': username})")
+            raise Exception("Failed to update data in Redis")
 
         logging.info(f"Mode changed: id{device_id}, mode = {new_mode}")
         return {"message": f"Mode changed: id{device_id}, mode = {new_mode}", "status_code": 200}

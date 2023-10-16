@@ -529,8 +529,8 @@ class UpdateUser(Resource):
             
             device_token = data.get('device_token')
             if not device_token or not sm.get_data_from_redis(device_token):
-                logging.warning("Invalid or missing device token.")
-                return {"message": "Invalid or missing device token"}, 400
+                logging.warning(f"Invalid or missing device token: {device_token}.")
+                return {"message": f"Invalid or missing device token: {device_token}"}, 400
 
             proxy_id = data.get('id')
             new_username = data.get('new_username')
@@ -540,6 +540,9 @@ class UpdateUser(Resource):
 
             update_username = old_username is not None and new_username is not None
             update_password = old_password is not None and new_password is not None
+
+            device_data = sm.get_data_from_redis(device_token)
+            username = device_data.get('username', '')
 
             if not (update_username or update_password):
                 return {"message": "Invalid input. Either update username or password, not both or neither."}, 400
@@ -553,7 +556,10 @@ class UpdateUser(Resource):
                         not cm.update_user_in_config(old_username, new_username, proxy_id):
                     raise Exception("Failed to update username")
 
-                logging.debug(f"Username updated: {old_username} --> {new_username}, {old_password} --> {new_password} ")
+                if not sm.update_data_in_redis(device_token, {'username': new_username}):
+                    raise Exception("Failed to update data in Redis")
+
+                logging.debug(f"Username updated in ACL, CONFIG, REDIS: {old_username} --> {new_username}, {old_password} --> {new_password} ")
                 return {"message": "Username updated successfully"}, 200
 
             if update_password:

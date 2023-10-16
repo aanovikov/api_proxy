@@ -76,6 +76,7 @@ def update_data_in_redis(token, fields):
     for field, value in fields.items():
         r.hset(token, field, value)
         logging.info(f"Updated data: token: {token}, NEW {field} = {value}")
+        return True
 
 def delete_from_redis(token):
     try:
