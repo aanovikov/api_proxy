@@ -377,10 +377,10 @@ def update_auth_in_config(proxy_id, username, protocol, auth_type, allow_ip):
         end_tag = f"# End {protocol} for {username} id{proxy_id}"
 
         search_pattern = f"# Start {protocol} for {username} id{proxy_id}"
-        #logging.info(search_pattern)
-        id_exists_in_config_result = id_exists_in_config(search_pattern, proxy_id, username)
+        logging.debug(search_pattern)
+        modem_id_exists_in_config_result = modem_id_exists_in_config(search_pattern, proxy_id, username)
 
-        if not id_exists_in_config_result:
+        if not modem_id_exists_in_config_result:
             logging.error(f"No {username} or id{proxy_id} found in the config.")
             return False, f"No {username} or id{proxy_id} found in the config."
 
@@ -501,54 +501,77 @@ def update_mode_in_config(new_mode, parent_ip, device_token, http_port, socks_po
         logging.error(f"An error occurred: {e}")
         return {"message": f"An error occurred: {e}", "status_code": 500}
 
-def ip_exists_in_config(ip_address):
+def android_ip_exists_in_config(old_ip):
     try:
         content = read_file(CONFIG_PATH)
         if content is None:
             logging.error("An error occurred while reading the config file.")
             return False
 
-        if ip_address in ''.join(content):
-            logging.info(f"IP address {ip_address} exists in 3proxy config.")
+        if old_ip in ''.join(content):
+            logging.info(f"IP address {old_ip} exists in 3proxy config.")
             return True
 
-        logging.info(f"IP address {ip_address} does not exist in 3proxy config.")
+        logging.info(f"IP address {old_ip} does not exist in 3proxy config.")
         return False
 
     except Exception as e:
         logging.error(f"An error occurred while checking IP in config: {str(e)}")
         return False
 
-def change_device_in_config(old_ip, new_ip):
+def replace_android_in_config(old_ip, new_ip, old_id, new_id, username):
     try:
-        content = read_file(CONFIG_PATH)
-        if content is None:
-            logging.error("An error occurred while reading the config file.")
-            return False
-
-        updated_content = ''.join(content).replace(old_ip, new_ip)
+        logging.info(f"Changing ID and IP in config: old_ip: {old_ip}, new_ip: {new_ip}, old_id: {old_id}, new_id: {new_id}")
         
-        if write_file(CONFIG_PATH, updated_content):
-            logging.info(f"Changed device IP from {old_ip} to {new_ip} in the configuration.")
-            return True
-        else:
-            logging.error("An error occurred while writing to the config file.")
-            return False
+        new_lines = []
+        inside_user_block = False
+
+        with open(CONFIG_PATH, "r") as f:
+            lines = f.readlines()
+        
+        for line in lines:
+            new_line = line
+
+            if f"# Start http for {username} id{old_id}" in line.strip():
+                logging.debug(f"Entering user block: {inside_user_block}")
+                inside_user_block = True
+
+            elif f"# End http for {username} id{old_id}" in line.strip():
+                new_line = re.sub(r'(?<= id)\d+(?![\w\d])', str(new_id), new_line)
+                inside_user_block = False
+                logging.debug(f"Exiting user block: {inside_user_block}")
+
+            if inside_user_block:
+                new_line = re.sub(r'(?<= id)\d+(?![\w\d])', str(new_id), new_line)
+                new_line = new_line.replace(old_ip, new_ip)
+
+            new_lines.append(new_line)
+
+        with open(CONFIG_PATH, "w") as f:
+            f.writelines(new_lines)
+
+        return True
+
     except Exception as e:
-        logging.error(f"An error occurred while changing device IP in config: {str(e)}")
+        logging.error(f"An error occurred: {e}")
         return False
 
-def id_exists_in_config(search_pattern, proxy_id, username):
+def modem_id_exists_in_config(proxy_id, username):
     try:
         content = read_file(CONFIG_PATH)
         if content is None:
             logging.error("An error occurred while reading the config file.")
             return False
 
-        #search_pattern = f'-Doid{id}'
-        if search_pattern in ''.join(content):
-            #logging.info(f"Config exists: username: {username}, id{proxy_id}")
-            return True
+        search_patterns = [
+            f"# Start http for {username} id{proxy_id}",
+            f"# Start socks for {username} id{proxy_id}"
+        ]
+
+        for search_pattern in search_patterns:
+            if search_pattern in ''.join(content):
+                logging.debug(f"Config exists: {username}, id{proxy_id}")
+                return True
 
         logging.info(f"Config DOES NOT exist: username: {username}, id{proxy_id}")
         return False
@@ -557,49 +580,39 @@ def id_exists_in_config(search_pattern, proxy_id, username):
         logging.error(f"An error occurred while checking ID in config: {str(e)}")
         return False
 
-def change_id_in_config(old_id, new_id):
+def replace_modem_in_config(old_id, new_id, username):
     try:
-        content = read_file(CONFIG_PATH)
-        if content is None:
-            logging.error("An error occurred while reading the config file.")
-            return False
+        logging.info(f"Changing ID in config: old_id: {old_id}, new_id: {new_id}")
 
-        search_string = f'-Doid{old_id}"'
-        updated_content = ''.join(content).replace(search_string, f'-Doid{new_id}"')
+        new_lines = []
+        inside_user_block = False
 
-        if write_file(CONFIG_PATH, updated_content):
-            logging.info(f"Changed ID from {old_id} to {new_id} in the configuration.")
-            return True
-        else:
-            logging.error("An error occurred while writing to the config file.")
-            return False
+        with open(CONFIG_PATH, "r") as f:
+            lines = f.readlines()
+
+        for line in lines:
+            new_line = line
+
+            if f"# Start http for {username} id{old_id}" in line.strip():
+                logging.debug(f"Entering user block: {inside_user_block}")
+                inside_user_block = True
+                
+            elif f"# End socks for {username} id{old_id}" in line.strip():
+                new_line = re.sub(r'(?<= id)\d+(?![\w\d])', str(new_id), new_line)
+                inside_user_block = False
+                logging.debug(f"Exiting user block: {inside_user_block}")          
+                
+            if inside_user_block:
+                new_line = re.sub(r'(?<=-Doid)\d+', str(new_id), line)
+                new_line = re.sub(r'(?<= id)\d+(?![\w\d])', str(new_id), new_line)
+
+            new_lines.append(new_line)
+                
+        with open(CONFIG_PATH, "w") as f:
+            f.writelines(new_lines)
+
+        return True
 
     except Exception as e:
-        logging.error(f"An error occurred while changing ID in config: {str(e)}")
-        return False
-
-def write_modem_ip(ext_ip, id):
-    # Define the directory and cross-platform file path
-    directory = os.path.join("/etc", "3proxy", "modem_ip")
-    file_path = os.path.join(directory, id)
-
-    # Check if the directory exists
-    if not os.path.exists(directory):
-        logging.error(f"Directory {directory} does not exist.")
-        return False
-
-    # Command to write the ext_ip to the file
-    shell_command = dedent(f"""
-        echo {ext_ip} > {file_path}
-    """).strip()
-
-    try:
-        if os.name == 'nt':  # For Windows
-            subprocess.run(shell_command, shell=True, check=True)
-        else:  # For Linux and macOS
-            subprocess.run(['bash', '-c', shell_command], check=True)
-        logging.info(f"Successfully written {ext_ip} to {file_path}")
-        return True
-    except subprocess.CalledProcessError as e:
-        logging.error(f"An error occurred while writing to {file_path}: {e}")
-        return False
+        logging.error(f"An error occurred: {e}")
+        return {"message": f"An error occurred: {e}", "status_code": 500}

@@ -7,6 +7,7 @@ import logging
 from functools import wraps
 import secrets
 import base64
+from flask import request
 
 atexit.register(lambda: scheduler.shutdown())
 
@@ -77,3 +78,11 @@ def is_valid_port(port):
         return 10000 <= port_num <= 65000
     except ValueError:
         return False
+
+def validate_and_extract_data(required_fields):
+    data = request.json
+    if data is None:
+        return None, {"message": "Invalid request: JSON body required"}, 400
+    if not all(data.get(field) for field in required_fields):
+        return None, {"message": f"Missing required fields: {required_fields}"}, 400
+    return data, None, None

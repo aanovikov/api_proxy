@@ -3,7 +3,7 @@ import mysql.connector
 import redis
 import traceback
 from dotenv import load_dotenv
-from redis.exceptions import ResponseError
+from redis.exceptions import ResponseError, ConnectionError, TimeoutError, RedisError
 import os
 
 load_dotenv()
@@ -72,11 +72,20 @@ def get_data_from_redis(token):
     return {k.decode('utf-8'): v.decode('utf-8') for k, v in all_values.items()}
 
 def update_data_in_redis(token, fields):
-    r = connect_to_redis()
+    pipe = get_redis_pipeline()
+    if not pipe:
+        logging.error("Could not get Redis pipeline. Aborting operation.")
+        return False
+
     for field, value in fields.items():
-        r.hset(token, field, value)
-        logging.info(f"Updated data: token: {token}, NEW {field} = {value}")
-        return True
+        pipe.hset(token, field, value)
+
+    if not execute_pipeline(pipe):
+        logging.error(f"Failed to update data for token: {token}")
+        return False
+
+    logging.info(f"Updated data: token: {token}, NEW {field} = {value}")
+    return True
 
 def delete_from_redis(token):
     try:
@@ -97,6 +106,28 @@ def delete_from_redis(token):
     except Exception as e:
         logging.error(f"An error occurred during Redis token deletion: {str(e)}")
         return False
+
+def get_redis_pipeline():
+    try:
+        r = connect_to_redis()
+        if r:
+            pipeline = r.pipeline()
+            logging.debug("Successfully created a Redis pipeline.")
+            return pipeline
+        else:
+            logging.error("Failed to create a Redis pipeline. Redis connection is None.")
+            return None
+    except Exception as e:
+        logging.error(f"An error occurred while creating a Redis pipeline: {str(e)}")
+        return None
+
+def execute_pipeline(pipe):
+    try:
+        pipe.execute()
+    except redis.exceptions.RedisError as e:
+        logging.error(f"Failed to execute pipeline: {str(e)}")
+        raise
+    return True
 
 def serial_exists(target_serial):
     try:

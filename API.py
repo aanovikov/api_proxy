@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from device_management import adb_reboot_device, get_adb_device_status, os_boot_status
 from network_management import airplane_toggle_cmd, MODEM_HANDLERS, wait_for_ip, enable_modem
 from settings import TETHERING_COORDINATES, ALLOWED_PROTOCOLS
-from tools import schedule_job, generate_short_token, requires_role, is_valid_port, scheduler
+from tools import schedule_job, generate_short_token, requires_role, is_valid_port, scheduler, validate_and_extract_data
 import storage_management as sm
 import conf_management as cm
 
@@ -196,12 +196,12 @@ class DeleteUser(Resource):
                 logging.error("Invalid request: JSON body required.")
                 return {"message": "Invalid request: JSON body required"}, 400
 
-            # Get proxy_id and user_token from JSON body
+            # Get proxy_id and device_token from JSON body
             proxy_id = data.get('id') # to remove using proxy_id in config
-            user_token = data.get('token') # to remove key using token in redis
+            device_token = data.get('device_token') # to remove key using token in redis
             username = data.get ('username')
 
-            if not proxy_id or not user_token or not username:
+            if not proxy_id or not device_token or not username:
                 logging.error("Missing required fields: proxy_id and/or token/or username.")
                 return {"message": "Missing required fields: proxy_id and/or token/or username"}, 400
 
@@ -211,7 +211,7 @@ class DeleteUser(Resource):
                 return {"message": "User does not exist"}, 404
 
             # Check token and username in Redis
-            user_data = sm.get_data_from_redis(user_token)
+            user_data = sm.get_data_from_redis(device_token)
             if not user_data or user_data.get('id') != proxy_id:
                 logging.error("Invalid proxy_id or token.")
                 return {"message": "Invalid proxy_id or token"}, 400
@@ -244,10 +244,10 @@ class DeleteUser(Resource):
                 logging.info(f"User has {count_users} proxy, SKIP removing ACL: {username}")
             
             # Remove from Redis
-            result = sm.delete_from_redis(user_token)
+            result = sm.delete_from_redis(device_token)
             if not result:
-                logging.error(f"Token not found in Redis or failed to remove: {user_token}")
-                return ({f"message": f"Token not found in Redis or failed to remove: {user_token}"}, 404)
+                logging.error(f"Token not found in Redis or failed to remove: {device_token}")
+                return ({f"message": f"Token not found in Redis or failed to remove: {device_token}"}, 404)
 
             logging.info(f"User deleted: {username}")
             return ({f"message": f"User deleted: {username}"}, 200)
@@ -494,7 +494,7 @@ class AddUser(Resource):
             else:
                 logging.info(f"Added user config: {user_data['username']}.")
 
-            data_to_redis = ['serial', 'device', 'mode', 'id', 'username']
+            data_to_redis = ['serial', 'device', 'mode', 'id', 'username', 'parent_ip']
             data_to_redis_storage = {field: user_data[field] for field in data_to_redis}
             redis_result = sm.store_to_redis(data_to_redis_storage, token)
 
@@ -541,8 +541,8 @@ class UpdateUser(Resource):
             update_username = old_username is not None and new_username is not None
             update_password = old_password is not None and new_password is not None
 
-            device_data = sm.get_data_from_redis(device_token)
-            username = device_data.get('username', '')
+            redis_data = sm.get_data_from_redis(device_token)
+            username = redis_data.get('username', '')
 
             if not (update_username or update_password):
                 return {"message": "Invalid input. Either update username or password, not both or neither."}, 400
@@ -588,42 +588,115 @@ class UpdateUser(Resource):
             logging.error(f"An error occurred: {str(e)}")
             return {"message": "Internal server error"}, 500
 
-class ChangeDevice(Resource):
+class ReplaceAndroid(Resource):
+    @requires_role("admin")
+    def patch(self, admin_token):
+        pipe = sm.get_redis_pipeline()
+        if not pipe:
+            logging.error("Could not get Redis pipeline. Aborting operation.")
+            return {"message": "Internal server error"}, 500
+
+        try:
+            logging.info("Received request: REPLACE ANDROID")
+
+            required_fields = ['device_token', 'new_id', 'new_serial', 'new_device', 'new_parent_ip']
+            
+            data, error_message, error_code = validate_and_extract_data(required_fields)
+
+            if error_message:
+                logging.warning(f"Validation failed: {error_message}")
+                return error_message, error_code
+
+            device_token = data.get('device_token')
+            new_id = data.get('new_id')
+            new_serial = data.get('new_serial')
+            new_device = data.get('new_device')
+            new_parent_ip = data.get('new_parent_ip')
+
+            redis_data = sm.get_data_from_redis(device_token)
+            if not redis_data:
+                logging.error(f"No data for token: {device_token}. Exiting.")
+                return {"message": f"No data for token: {device_token}", "status_code": 404}
+
+            username = redis_data.get('username', '')
+            old_id = redis_data.get('id', '')
+            old_serial = redis_data.get('serial', '')
+            old_device = redis_data.get('device', '')
+            old_parent_ip = redis_data.get('parent_ip', '')
+            
+            if not cm.android_ip_exists_in_config(old_parent_ip):
+                logging.error(f"IP is NOT found: {old_parent_ip}")
+                return {"message": f"IP is NOT found: {old_parent_ip}"}, 404
+
+            if not cm.replace_android_in_config(old_parent_ip, new_parent_ip, old_id, new_id, username):
+                logging.error(f"IP is NOT replaced: {old_parent_ip}")
+                return {"message": f"IP is NOT replaced: {old_parent_ip}"}, 404
+            logging.info(f"IP in CONFIG is replaced: {old_parent_ip} --> {new_parent_ip}")
+
+            pipe.hset(device_token, 'parent_ip', new_parent_ip)
+            pipe.hset(device_token, 'device', new_device)
+            pipe.hset(device_token, 'serial', new_serial)
+            pipe.hset(device_token, 'id', new_id)
+
+            if not sm.execute_pipeline(pipe):
+                logging.error("Failed to execute Redis pipeline. Aborting operation.")
+                return {"message": "Internal server error"}, 500
+
+            logging.info(f"Android replaced: {old_parent_ip} --> {new_parent_ip}, id{old_id} --> id{new_id}, {old_serial} --> {new_serial}, {old_device} --> {new_device}")
+            return {"message": f"Android replaced: id{old_id} --> id{new_id}"}, 200
+
+        except Exception as e:
+            logging.error(f"An error occurred: {str(e)}")
+            return {"message": "Internal server error"}, 500
+
+class ReplaceModem(Resource):
     @requires_role("admin")
     def patch(self, admin_token):
         try:
-            logging.info("Received request: CHANGE DEVICE.")
+            logging.info("Received request: REPLACE MODEM")
+
+            required_fields = ['device_token', 'new_id', 'new_serial', 'new_device']
             
-            data = request.json
-            if data is None:
-                return {"message": "Invalid request: JSON body required"}, 400
+            data, error_message, error_code = validate_and_extract_data(required_fields)
 
-            old_ip = data.get('old_ip')
-            new_ip = data.get('new_ip')
-            old_id = data.get('old_id')
+            if error_message:
+                logging.warning(f"Validation failed: {error_message}")
+                return error_message, error_code
+
+            device_token = data.get('device_token')
             new_id = data.get('new_id')
-            ext_ip = data.get('ext_ip')
+            new_serial = data.get('new_serial')
+            new_device = data.get('new_device')
 
-            if old_ip and new_ip:
-                if not cm.ip_exists_in_config(old_ip):
-                    logging.error(f"IP address {old_ip} not found in parent directive")
-                    return {"message": f"IP address {old_ip} not found in parent directive"}, 404
-                cm.change_device_in_config(old_ip, new_ip)
-                logging.info(f"Updated IP address from {old_ip} to {new_ip}")
+            redis_data = sm.get_data_from_redis(device_token)
+            if not redis_data:
+                logging.error(f"No data for token: {device_token}. Exiting.")
+                return {"message": f"No data for token: {device_token}", "status_code": 404}
 
-            if old_id and new_id:
-                if not cm.id_exists_in_config(old_id):
-                    logging.error(f"ID {old_id} not found in config")
-                    return {"message": f"ID {old_id} not found in config"}, 404
+            username = redis_data.get('username', '')
+            old_id = redis_data.get('id', '')
+            old_serial = redis_data.get('serial', '')
+            old_device = redis_data.get('device', '')
 
-                if ext_ip:
-                    cm.write_modem_ip(ext_ip, new_id)
-                    logging.info(f"Written ext_ip {ext_ip} for ID {new_id}")
-                cm.change_id_in_config(old_id, new_id)
-                logging.info(f"Updated ID from {old_id} to {new_id}")
+            if not cm.modem_id_exists_in_config(old_id, username):
+                logging.error(f"ID is NOT found: id{old_id}")
+                return {"message": f"ID is NOT found: id{old_id}"}, 404
 
-            logging.info("IP address and/or ID updated successfully")
-            return {"message": "IP address and/or ID updated successfully"}, 200
+            if not cm.replace_modem_in_config(old_id, new_id, username):
+                logging.error(f"ID is NOT replaced: {old_id}")
+                return {"message": f"IP is NOT replaced: {old_id}"}, 404
+            logging.info(f"ID is replaced: id{old_id} --> id{new_id}")
+
+            pipe.hset(device_token, 'id', new_id)
+            pipe.hset(device_token, 'serial', new_serial)
+            pipe.hset(device_token, 'device', new_device)
+
+            if not sm.execute_pipeline(pipe):
+                logging.error("Failed to execute Redis pipeline. Aborting operation.")
+                return {"message": "Internal server error"}, 500
+
+            logging.info(f"Modem replaced: id{old_id} --> id{new_id}, {old_serial} --> {new_serial}, {old_device} --> {new_device}")
+            return {"message": f"Modem replaced: id{old_id} --> id{new_id}"}, 200
 
         except Exception as e:
             logging.error(f"An error occurred: {str(e)}")
@@ -683,7 +756,7 @@ class ModemStatus(Resource):
                 return {"message": "Invalid device model provided. Use a correct 'device' field."}, 400
 
             status = handler(serial)
-            logging.info(f"Modem status for serial {serial}: {status}")
+            logging.info(f"Modem status: serial {serial}: {status}")
             return {"message": status}, 200
 
         except Exception as e:
@@ -701,7 +774,8 @@ api.add_resource(UpdateAuth, '/api/update_auth/<string:token>') #admin role
 api.add_resource(UpdateMode, '/api/update_mode/<string:token>') #admin role
 
 api.add_resource(UpdateUser, '/api/update_user/<string:token>') #admin role
-api.add_resource(ChangeDevice, '/api/change_device/<string:token>') #admin role
+api.add_resource(ReplaceAndroid, '/api/replace_android/<string:token>') #admin role
+api.add_resource(ReplaceModem, '/api/replace_modem/<string:token>')
 #api.add_resource(ModemToggle, '/api/modem/<string:token>') #admin role
 api.add_resource(ModemStatus, '/api/modemstatus/<string:token>/<string:device_model>') #admin role
 api.add_resource(ProxyCount, '/api/proxycount/<string:token>') #admin role
