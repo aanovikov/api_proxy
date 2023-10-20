@@ -14,7 +14,7 @@ from ipaddress import ip_address, AddressValueError
 from dotenv import load_dotenv
 
 from device_management import adb_reboot_device, get_adb_device_status, os_boot_status
-from network_management import airplane_toggle_cmd, MODEM_HANDLERS, wait_for_ip, enable_modem
+from network_management import airplane_toggle_cmd, MODEM_HANDLERS, wait_for_ip
 from settings import TETHERING_COORDINATES, ALLOWED_PROTOCOLS
 from tools import schedule_job, generate_short_token, requires_role, is_valid_port, scheduler, validate_and_extract_data
 import storage_management as sm
@@ -43,6 +43,8 @@ class Reboot(Resource):
     #@requires_role("user")
     def get(self, token):
         try:
+            logging.info("Received request: REBOOT")
+
             user_data = sm.get_data_from_redis(token)
             serial = user_data.get('serial')
             device = user_data.get('device')
@@ -248,6 +250,13 @@ class DeleteUser(Resource):
             if not result:
                 logging.error(f"Token not found in Redis or failed to remove: {device_token}")
                 return ({f"message": f"Token not found in Redis or failed to remove: {device_token}"}, 404)
+
+            if user_data.get('mode') == 'modem':
+                serial = user_data.get('serial')  # Предполагая, что serial хранится в user_data
+                device = user_data.get('device')
+                device_id = user_data.get('id')
+                MODEM_HANDLERS[device]['off'](serial)
+                logging.info(f"RNDIS OFF: id{device_id}, serial: {serial}")
 
             logging.info(f"User deleted: {username}")
             return ({f"message": f"User deleted: {username}"}, 200)
@@ -652,6 +661,11 @@ class ReplaceAndroid(Resource):
 class ReplaceModem(Resource):
     @requires_role("admin")
     def patch(self, admin_token):
+        pipe = sm.get_redis_pipeline()
+        if not pipe:
+            logging.error("Could not get Redis pipeline. Aborting operation.")
+            return {"message": "Internal server error"}, 500
+
         try:
             logging.info("Received request: REPLACE MODEM")
 

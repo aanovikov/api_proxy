@@ -24,7 +24,7 @@ def schedule_job(serial, device, device_id):
     try:
         scheduler.add_job(
             dm.os_boot_status,
-            'interval', seconds=10,
+            'interval', seconds=60,
             args=[serial, device, device_id, True],
             id=job_id,
             replace_existing=True

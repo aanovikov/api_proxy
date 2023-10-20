@@ -48,7 +48,7 @@ def modem_toggle_cmd(serial, mode):
             return
         
         command = f"adb -s {serial} shell svc usb setFunctions {mode}"
-        logging.info(f"Setting mode to {mode.upper()}: {command}, serial: {serial}")
+        logging.info(f"Setting mode to {mode.upper()}: {command}")
 
         result = subprocess.run(command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
@@ -72,9 +72,11 @@ def modem_get_status(serial, device_type='any'):
         base_command += "s"
 
     process = Popen(base_command.split(), stdout=PIPE, stderr=PIPE)
+
     try:
         stdout, stderr = process.communicate(timeout=10)  # 10 секунд таймаут
         error = stderr.decode()
+        logging.debug(f'COMMAND OUTPUT: {error}')
 
         if f"device '{serial}' not found" in error:
             logging.error(f"Device not found: serial {serial} ")
@@ -85,6 +87,7 @@ def modem_get_status(serial, device_type='any'):
         else:
             logging.info(f"Device is NOT in RNDIS: serial {serial}")
             return "rndis_off"
+
     except TimeoutExpired:
         process.kill()
         logging.error(f"Timeout modem status checking: serial {serial}")
@@ -202,26 +205,33 @@ def wait_for_ip(interface_name, retries=5, delay=3):
     logging.error(f"Exceeded max retries for getting IP on interface {interface_name}")
     return '127.0.0.1'
 
-def enable_modem(serial, device_model, device_id):
+def check_rndis_iface(device_id, serial):
     try:
-        logging.info(f"RNDIS is trying get up, ID: {device_id}, serial: {serial}, type: {device_model}")
+        adb_command = f"adb -s {serial} shell"
+        child = pexpect.spawn(adb_command)
         
-        for attempt in range(40):  # Maximum number of reboot status checks         
-            if status == "OK":
-                logging.info(f"Removed job ID: {job_id}, for ID: {device_id}, serial: {serial}")
-                break
-            time.sleep(10)  # Waiting time between attempts
+        child.expect('\$', timeout=10)
+
+        get_iface = "ip a"
+        child.sendline(get_iface)
+        
+        if child.expect(['rndis0', pexpect.TIMEOUT], timeout=10) == 0:
+            logging.info(f"RNDIS iface is ACTIVE: id{device_id}, serial: {serial}")
+            child.sendline('exit')
+            child.close()
+            return True
         else:
-            logging.warning(f"Device ID: {device_id}, serial: {serial} did not reboot successfully after 40 attempts")
-            #logging.info(f"Removed job ID {job_id}, reboot unsuccessful for ID: {device_id}, serial: {serial}")
-            return
-
-        if device_model not in MODEM_HANDLERS:
-            logging.error(f"Unknown device model: {device_model}. Can't reestablish rndis for ID: {device_id}, serial: {serial}")
-            return
-
-        MODEM_HANDLERS[device_model]['on'](serial)
-        logging.info(f"Modem turned on for ID: {device_id}, serial: {serial}")
-
+            logging.warning(f"RNDIS iface is NOT ACTIVE: id{device_id}, serial: {serial}")
+            child.sendline('exit')
+            child.close()
+            return False
+        
+    except pexpect.exceptions.TIMEOUT:
+        logging.error(f"Command timed out: id{device_id}, serial: {serial}")
+        raise pexpect.exceptions.TIMEOUT("Command timed out")
     except Exception as e:
-        logging.error(f"An error occurred while reestablishing rndis: {e}, for ID: {device_id}, serial: {serial}")
+        logging.error(f"An unexpected error occurred: id{device_id}, serial: {serial}: {e}")
+        raise e
+    except pexpect.EOF:
+        logging.error(f"EOF error. Device NOT found or adb issue: id{device_id}, serial: {serial}")
+        return False

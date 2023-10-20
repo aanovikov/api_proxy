@@ -533,16 +533,18 @@ def replace_android_in_config(old_ip, new_ip, old_id, new_id, username):
             new_line = line
 
             if f"# Start http for {username} id{old_id}" in line.strip():
-                logging.debug(f"Entering user block: {inside_user_block}")
                 inside_user_block = True
-
-            elif f"# End http for {username} id{old_id}" in line.strip():
+                logging.debug(f"Entering user block: {inside_user_block}")
+                
+            elif f"# End socks for {username} id{old_id}" in line.strip():
                 new_line = re.sub(r'(?<= id)\d+(?![\w\d])', str(new_id), new_line)
                 inside_user_block = False
                 logging.debug(f"Exiting user block: {inside_user_block}")
 
             if inside_user_block:
+                logging.debug(f"Replacing ID inside user block: {old_id} --> {new_id}")
                 new_line = re.sub(r'(?<= id)\d+(?![\w\d])', str(new_id), new_line)
+                logging.debug(f"Replacing ANDROID IP inside user block: {old_ip} --> {new_ip}")
                 new_line = new_line.replace(old_ip, new_ip)
 
             new_lines.append(new_line)
@@ -554,7 +556,7 @@ def replace_android_in_config(old_ip, new_ip, old_id, new_id, username):
 
     except Exception as e:
         logging.error(f"An error occurred: {e}")
-        return False
+        return {"message": f"An error occurred: {e}", "status_code": 500}
 
 def modem_id_exists_in_config(proxy_id, username):
     try:
@@ -594,16 +596,18 @@ def replace_modem_in_config(old_id, new_id, username):
             new_line = line
 
             if f"# Start http for {username} id{old_id}" in line.strip():
-                logging.debug(f"Entering user block: {inside_user_block}")
                 inside_user_block = True
-                
+                logging.debug(f"Entering user block: {inside_user_block}")
+                                
             elif f"# End socks for {username} id{old_id}" in line.strip():
                 new_line = re.sub(r'(?<= id)\d+(?![\w\d])', str(new_id), new_line)
                 inside_user_block = False
                 logging.debug(f"Exiting user block: {inside_user_block}")          
                 
             if inside_user_block:
+                logging.debug(f"Replacing MODEM ID inside user block: {old_id} --> {new_id}")
                 new_line = re.sub(r'(?<=-Doid)\d+', str(new_id), line)
+                logging.debug(f"Replacing ID inside user block: {old_id} --> {new_id}")
                 new_line = re.sub(r'(?<= id)\d+(?![\w\d])', str(new_id), new_line)
 
             new_lines.append(new_line)
