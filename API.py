@@ -14,7 +14,7 @@ from ipaddress import ip_address, AddressValueError
 from dotenv import load_dotenv
 
 from device_management import adb_reboot_device, get_adb_device_status, os_boot_status
-from network_management import airplane_toggle_cmd, MODEM_HANDLERS, wait_for_ip
+from network_management import airplane_toggle_cmd, MODEM_HANDLERS, wait_for_ip, airplane_toggle_coordinates
 from settings import TETHERING_COORDINATES, ALLOWED_PROTOCOLS
 from tools import schedule_job, generate_short_token, requires_role, is_valid_port, scheduler, validate_and_extract_data
 import storage_management as sm
@@ -124,17 +124,23 @@ class ChangeIP(Resource):
         try:
             user_data = sm.get_data_from_redis(token)
             serial = user_data.get('serial')
+            device = user_data.get('device')
             logging.info(f"Received request: change IP, serial: {serial}")
 
             if not serial:
                 logging.error("Serial not found in user data.")
                 return {'error': 'Serial not found'}, 400
             
-            airplane_toggle_cmd(serial)
+            # Check if device is 'ais'
+            if device == 'ais':
+                airplane_toggle_coordinates(serial, device)
+            else:
+                airplane_toggle_cmd(serial)
+            
             return {'status': 'success', 'message': 'IP was changed'}, 200
 
         except Exception as e:
-            logging.error("An error occurred")
+            logging.error(f"An error occurred: {e}")
             return {'status': 'failure', 'message': 'An error occurred while changing IP'}, 500
 
 class AutoChangeIP(Resource):
