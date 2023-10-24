@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from device_management import adb_reboot_device, get_adb_device_status, os_boot_status
 from network_management import airplane_toggle_cmd, MODEM_HANDLERS, wait_for_ip, airplane_toggle_coordinates
 from settings import TETHERING_COORDINATES, ALLOWED_PROTOCOLS
-from tools import schedule_job, generate_short_token, requires_role, is_valid_port, scheduler, validate_and_extract_data
+import tools as ts
 import storage_management as sm
 import conf_management as cm
 
@@ -40,7 +40,7 @@ ACL_PATH = os.getenv('ACL_PATH')
 CONFIG_PATH = os.getenv('CONFIG_PATH')
 
 class Reboot(Resource):
-    #@requires_role("user")
+    #@ts.requires_role("user")
     def get(self, token):
         try:
             logging.info("Received request: REBOOT")
@@ -67,7 +67,7 @@ class Reboot(Resource):
 
             if mode == "modem":
                 adb_reboot_device(serial, device_id)
-                schedule_job(serial, device, device_id)
+                ts.schedule_job(serial, device, device_id)
                 return {'reboot': 'OK', 'message': 'Reboot is started.'}, 202
 
             logging.error(f"Unknown mode provided for device id: {device_id}, serial: {serial}.")
@@ -78,7 +78,7 @@ class Reboot(Resource):
             return {'error': 'Internal server error'}, 500
 
 class DeviceStatus(Resource):
-    #@requires_role("user")
+    #@ts.requires_role("user")
     def get(self, token, serial=None):
         try:
             serial = request.args.get('serial')  # Get serial from query params
@@ -125,7 +125,9 @@ class ChangeIP(Resource):
             user_data = sm.get_data_from_redis(token)
             serial = user_data.get('serial')
             device = user_data.get('device')
-            logging.info(f"Received request: change IP, serial: {serial}")
+            username = user_data.get('username')
+            id = user_data.get('id')
+            logging.info(f"Received request: CHANGE IP, id{id}, user {username}, {serial}")
 
             if not serial:
                 logging.error("Serial not found in user data.")
@@ -133,10 +135,17 @@ class ChangeIP(Resource):
             
             # Check if device is 'ais'
             if device == 'ais':
-                airplane_toggle_coordinates(serial, device)
+                logging.info(f"Airplane on\off via TOUCH: id{id}, user {username}, {serial}")
+                if 'toggle_airplane' in MODEM_HANDLERS[device]:
+                    MODEM_HANDLERS[device]['toggle_airplane'](serial)
+                else:
+                    logging.error(f"No 'toggle_airplane' for device {device}.")
+                    return {'error': 'Operation not supported for this device'}, 400
             else:
+                logging.info(f"Airplane on\off via CMD: id{id}, user {username}, {serial}")
                 airplane_toggle_cmd(serial)
-            
+
+            logging.info(f"Airplane switching DONE: id{id}, user {username}, {serial}")
             return {'status': 'success', 'message': 'IP was changed'}, 200
 
         except Exception as e:
@@ -162,7 +171,7 @@ class AutoChangeIP(Resource):
             # Cancel the scheduled job
             if interval_minutes == '0':
                 try:
-                    scheduler.remove_job(job_id)
+                    ts.scheduler.remove_job(job_id)
                     logging.info(f"Cancelled scheduled IP changes: id{device_id}, serial {serial}, token: {token}")
                     return {'status': 'success', 'message': f'Cancelled scheduled IP changes for device: {token}'}, 200
                 except Exception as e:
@@ -173,7 +182,7 @@ class AutoChangeIP(Resource):
             else:
                 interval_minutes = int(interval_minutes)  # Convert to int
                 try:
-                    scheduler.add_job(
+                    ts.scheduler.add_job(
                         func=airplane_toggle_cmd, 
                         trigger='interval', 
                         minutes=interval_minutes, 
@@ -193,7 +202,7 @@ class AutoChangeIP(Resource):
             return {'status': 'failure', 'message': str(e)}, 500
 
 class DeleteUser(Resource):
-    @requires_role("admin")
+    @ts.requires_role("admin")
     def delete(self, admin_token):
         try:
             logging.info("Received request: DELETE USER.")
@@ -261,8 +270,19 @@ class DeleteUser(Resource):
                 serial = user_data.get('serial')  # Предполагая, что serial хранится в user_data
                 device = user_data.get('device')
                 device_id = user_data.get('id')
-                MODEM_HANDLERS[device]['off'](serial)
-                logging.info(f"RNDIS OFF: id{device_id}, serial: {serial}")
+
+                status_handler = MODEM_HANDLERS.get(device, {}).get('status')
+                status = status_handler(serial) if status_handler else None
+
+                if status == "device_not_found":
+                    logging.error(f"Device not found, possibly it has lost connection: id{device_id}, serial: {serial}")
+                elif status == "timeout":
+                    logging.error(f"Device timed out, possibly it has lost connection: id{device_id}, serial: {serial}")
+                elif status == "rndis":
+                    MODEM_HANDLERS[device]['off'](serial)
+                    logging.info(f"RNDIS OFF: id{device_id}, serial: {serial}")
+                else:
+                    logging.warning(f"NOT in RNDIS: {status}: id{device_id}, serial: {serial}")
 
             logging.info(f"User deleted: {username}")
             return ({f"message": f"User deleted: {username}"}, 200)
@@ -273,10 +293,10 @@ class DeleteUser(Resource):
 
         except Exception as e:
             logging.exception(f"An error occurred: {str(e)}")
-            return {"message": "Internal server error"}, 500
+            return {"message": f"An error occurred: {str(e)}"}, 500
 
 class UpdateAuth(Resource):
-    @requires_role("admin")
+    @ts.requires_role("admin")
     def patch(self, admin_token):
         try:
             logging.info("Received request: UPDATE AUTH.")
@@ -361,7 +381,7 @@ class UpdateAuth(Resource):
             return {"message": "Internal server error"}, 500
 
 class UpdateMode(Resource):
-    @requires_role("admin")
+    @ts.requires_role("admin")
     def post(self, admin_token):
         try:
             logging.info("Received request: UPDATE MODE.")
@@ -409,11 +429,11 @@ class UpdateMode(Resource):
             logging.error(f"An error occurred: {str(e)}")
             return {"message": f"Internal server error: {str(e)}"}, 500
 
-class AddUser(Resource):
-    @requires_role("admin")
+class AddUserModem(Resource):
+    @ts.requires_role("admin")
     def post(self, admin_token):
         try:
-            logging.info("Received request: ADD USER.")
+            logging.info("Received request: ADD USER MODEM.")
             
             data = request.json
             if data is None:
@@ -422,26 +442,39 @@ class AddUser(Resource):
 
             logging.info(f"Received data: {data}")
 
-            all_fields = ['username', 'password', 'mode', 'http_port', 'socks_port', 'serial', 'device', 'id', 'parent_ip']
+            required_fields = ['username', 'password', 'http_port', 'socks_port', 'serial', 'device', 'id']
 
-            if not all(data.get(field) for field in all_fields):
-                logging.warning("Missing required fields in data")
-                return {"message": "Missing required fields"}, 400
+            data, error_message, error_code = ts.validate_and_extract_data(required_fields)
 
-            user_data = {field: data[field] for field in all_fields}
-            
-            if not is_valid_port(user_data['http_port']) or not is_valid_port(user_data['socks_port']):
-                logging.warning("Invalid port numbers")
-                return {"message": "Port numbers should be between 10000 and 65000"}, 400
+            if error_message:
+                logging.warning(f"Validation failed: {error_message}")
+                return error_message, error_code
 
+            user_data = {field: data[field] for field in required_fields}
+            user_data['mode'] = 'modem'
+
+            #validating data
+            fields_to_validate = {
+                'username': ts.is_valid_logopass,
+                'password': ts.is_valid_logopass,
+                'serial': ts.is_valid_serial,
+                'device': ts.is_valid_device,
+                'http_port': ts.is_valid_port,
+                'socks_port': ts.is_valid_port,
+                'id': ts.is_valid_id
+            }
+
+            for field, validation_func in fields_to_validate.items():
+                error_message, error_code = ts.validate_field(field, user_data[field], validation_func)
+                if error_message:
+                    return error_message, error_code
+
+            #check existing in redis
             if sm.serial_exists(user_data['serial']):
                 logging.warning(f"Serial already exists: {user_data['serial']}")
                 return {"message": f"Serial already exists: {user_data['serial']}"}, 400
 
             logging.info(f"Redis check OK: {user_data['username']}")
-
-            if user_data.get('id') and not user_data['id'].isdigit():
-                return {"message": "Invalid ID format"}, 400
             
             status_handler = MODEM_HANDLERS.get(user_data['device'], {}).get('status')
             status = status_handler(user_data['serial']) if status_handler else None
@@ -453,48 +486,136 @@ class AddUser(Resource):
                 logging.error("Device timed out, possibly it has lost connection")
                 return {"message": "Device timed out, possibly it has lost connection"}, 500
 
-            if user_data['mode'] == 'modem':
-                #toggle_wifi(user_data['serial'], "off")
+            if status == "rndis":
+                interface_name = f"id{user_data['id']}"
+                ip_address = wait_for_ip(interface_name)
+                if ip_address != '127.0.0.1':
+                    logging.info(f"Modem is already on, IP: {ip_address}")
 
-                if id is None:
-                    logging.warning("ID is required for modem mode")
-                    return {"message": "ID is required for modem mode"}, 400
-
-                if status == "rndis":
-                    interface_name = f"id{user_data['id']}"
-                    ip_address = wait_for_ip(interface_name)
-                    if ip_address != '127.0.0.1':
-                        logging.info(f"Modem is already on, IP: {ip_address}")
-
+            else:
+                handler = MODEM_HANDLERS.get(user_data['device'], {}).get('on')
+                logging.debug(f'HANDLER 1: {handler}')
+                handler(user_data['serial'])
+                interface_name = f"id{user_data['id']}"
+                ip_address = wait_for_ip(interface_name)
+                if ip_address != '127.0.0.1':
+                    logging.info("Modem turned on successfully")
                 else:
-                    handler = MODEM_HANDLERS.get(user_data['device'], {}).get('on')
-                    handler(user_data['serial'])
-                    interface_name = f"id{user_data['id']}"
-                    ip_address = wait_for_ip(interface_name)
-                    if ip_address != '127.0.0.1':
-                        logging.info("Modem turned on successfully")
-                    else:
-                        logging.error("Interface not ready, unable to get IP address")
-                        return {"message": "Interface not ready, unable to get IP address"}, 500
+                    logging.error("Interface not ready, unable to get IP address")
+                    return {"message": "Interface not ready, unable to get IP address"}, 500
 
-            if user_data['mode'] == "android":
-                #toggle_wifi(user_data['serial'], "off")
-                
-                if user_data['parent_ip'] == "none":
-                    logging.warning("In android mode, parent_ip cannot be none")
-                    return {"message": "In android mode, parent_ip is required"}, 400
-                if status == "rndis":
-                    handler = MODEM_HANDLERS.get(user_data['device'], {}).get('on')
-                    handler(user_data['serial'])
-                    logging.info("Modem turned off successfully")
-                else:
-                    logging.info("Modem is already turned off")
-
-            token = generate_short_token()
+            token = ts.generate_short_token()
             logging.info(f"Generated token: {token}")
 
             acl_result = cm.add_user_to_acl(user_data['username'], user_data['password'])
-            config_result = cm.add_user_config(user_data['username'], user_data['mode'], user_data['parent_ip'], user_data['http_port'], user_data['socks_port'], user_data['id'])
+            config_result = cm.add_user_config(user_data['username'], user_data['mode'], user_data['http_port'], user_data['socks_port'], user_data['id'])
+
+            if not acl_result:
+                logging.error(f"Failed to add user to ACL. Aborting operation.: {user_data['username']}")
+                return {"message": "Failed to add user to ACL"}, 500
+            else:
+                logging.info(f"Added user to ACL: {user_data['username']}")
+
+            if not config_result:
+                logging.error(f"Failed to add config. Rolling back ACL.: {user_data['username']}.")
+                cm.remove_user_from_acl(user_data['username'])
+                return {"message": "Failed to add user config. Rolled back ACL"}, 500
+            else:
+                logging.info(f"Added user config: {user_data['username']}.")
+
+            data_to_redis = ['serial', 'device', 'mode', 'id', 'username']
+            data_to_redis_storage = {field: user_data[field] for field in data_to_redis}
+            redis_result = sm.store_to_redis(data_to_redis_storage, token)
+
+            if not redis_result:
+                logging.error(f"Failed to store user data to Redis for user {user_data['username']} id{user_data['id']}. Rolling back ACL and config.")
+                cm.remove_user_from_acl(user_data['username'])
+                cm.remove_user_config(user_data['username'], user_data['id'])
+                return {"message": "Failed to store user data to Redis. Rolled back ACL and config"}, 500
+            else:
+                logging.info(f"Added data to redis: {user_data['username']}, id{user_data['id']}.")
+
+                logging.info(f"User added: {user_data['username']}")
+                return {"message": f"User added: {user_data['username']}, token: {token}"}, 201
+        
+        except BadRequest:
+            logging.error("Bad request, possibly malformed JSON.")
+            return {"message": "Invalid JSON format received"}, 400
+
+        except Exception as e:
+            logging.error(f"An error occurred: {str(e)}")
+            return {"message": f"Internal server error: {str(e)}"}, 500
+
+class AddUserAndroid(Resource):
+    @ts.requires_role("admin")
+    def post(self, admin_token):
+        try:
+            logging.info("Received request: ADD USER ANDROID.")
+            
+            data = request.json
+            if data is None:
+                logging.warning("Invalid request: Missing JSON body")
+                return {"message": "Invalid request: JSON body required"}, 400
+
+            logging.info(f"Received data: {data}")
+
+            required_fields = ['username', 'password', 'http_port', 'socks_port', 'serial', 'device', 'id', 'parent_ip']
+
+            data, error_message, error_code = ts.validate_and_extract_data(required_fields)
+
+            if error_message:
+                logging.warning(f"Validation failed: {error_message}")
+                return error_message, error_code
+
+            user_data = {field: data[field] for field in required_fields}
+            user_data['mode'] = 'android'
+            
+            #validating data
+            fields_to_validate = {
+                'username': ts.is_valid_logopass,
+                'password': ts.is_valid_logopass,
+                'serial': ts.is_valid_serial,
+                'device': ts.is_valid_device,
+                'http_port': ts.is_valid_port,
+                'socks_port': ts.is_valid_port,
+                'id': ts.is_valid_id,
+                'parent_ip': ts.is_valid_ip
+            }
+
+            for field, validation_func in fields_to_validate.items():
+                error_message, error_code = ts.validate_field(field, user_data[field], validation_func)
+                if error_message:
+                    return error_message, error_code
+
+            if sm.serial_exists(user_data['serial']):
+                logging.warning(f"Serial already exists: {user_data['serial']}")
+                return {"message": f"Serial already exists: {user_data['serial']}"}, 400
+
+            logging.info(f"Redis check OK: {user_data['username']}")
+
+            #checking modem
+            status_handler = MODEM_HANDLERS.get(user_data['device'], {}).get('status')
+            status = status_handler(user_data['serial']) if status_handler else None
+            
+            if status == "device_not_found":
+                logging.error("Device not found, possibly it has lost connection")
+                return {"message": "Device not found, possibly it has lost connection"}, 500
+            elif status == "timeout":
+                logging.error("Device timed out, possibly it has lost connection")
+                return {"message": "Device timed out, possibly it has lost connection"}, 500
+
+            if status == "rndis":
+                handler = MODEM_HANDLERS.get(user_data['device'], {}).get('off')
+                handler(user_data['serial'])
+                logging.info("Modem turned off successfully")
+            else:
+                logging.warning("Modem is NOT turned off")
+
+            token = ts.generate_short_token()
+            logging.info(f"Generated token: {token}")
+
+            acl_result = cm.add_user_to_acl(user_data['username'], user_data['password'])
+            config_result = cm.add_user_config(user_data['username'], user_data['mode'], user_data['http_port'], user_data['socks_port'], user_data['id'], user_data['parent_ip'])
 
             if not acl_result:
                 logging.error(f"Failed to add user to ACL. Aborting operation.: {user_data['username']}")
@@ -533,7 +654,7 @@ class AddUser(Resource):
             return {"message": f"Internal server error: {str(e)}"}, 500
 
 class UpdateUser(Resource):
-    @requires_role("admin")
+    @ts.requires_role("admin")
     def patch(self, admin_token):
         try:
             logging.info("Received request: UPDATE LOGOPASS.")
@@ -604,7 +725,7 @@ class UpdateUser(Resource):
             return {"message": "Internal server error"}, 500
 
 class ReplaceAndroid(Resource):
-    @requires_role("admin")
+    @ts.requires_role("admin")
     def patch(self, admin_token):
         pipe = sm.get_redis_pipeline()
         if not pipe:
@@ -616,7 +737,7 @@ class ReplaceAndroid(Resource):
 
             required_fields = ['device_token', 'new_id', 'new_serial', 'new_device', 'new_parent_ip']
             
-            data, error_message, error_code = validate_and_extract_data(required_fields)
+            data, error_message, error_code = ts.validate_and_extract_data(required_fields)
 
             if error_message:
                 logging.warning(f"Validation failed: {error_message}")
@@ -665,7 +786,7 @@ class ReplaceAndroid(Resource):
             return {"message": "Internal server error"}, 500
 
 class ReplaceModem(Resource):
-    @requires_role("admin")
+    @ts.requires_role("admin")
     def patch(self, admin_token):
         pipe = sm.get_redis_pipeline()
         if not pipe:
@@ -677,7 +798,7 @@ class ReplaceModem(Resource):
 
             required_fields = ['device_token', 'new_id', 'new_serial', 'new_device']
             
-            data, error_message, error_code = validate_and_extract_data(required_fields)
+            data, error_message, error_code = ts.validate_and_extract_data(required_fields)
 
             if error_message:
                 logging.warning(f"Validation failed: {error_message}")
@@ -723,7 +844,7 @@ class ReplaceModem(Resource):
             return {"message": "Internal server error"}, 500
 
 class ProxyCount(Resource):
-    @requires_role("admin")
+    @ts.requires_role("admin")
     def get(self, admin_token):
         connection = None
         cursor = None
@@ -765,7 +886,7 @@ class ProxyCount(Resource):
                 connection.close()
 
 class ModemStatus(Resource):
-    @requires_role("admin")
+    @ts.requires_role("admin")
     def get(self, admin_token, serial, device_model):
         try:
             logging.info("Received request: CHECK MODEM STATUS.")
@@ -788,7 +909,8 @@ api.add_resource(Reboot, '/api/reboot/<string:token>') #user role
 api.add_resource(DeviceStatus, '/api/device_status/<string:token>') #user role
 api.add_resource(ChangeIP, '/api/changeip/<string:token>') #user role
 api.add_resource(AutoChangeIP, '/api/changeip/auto/<string:token>') #user role
-api.add_resource(AddUser, '/api/add_user/<string:token>') #admin role
+api.add_resource(AddUserModem, '/api/add_user_modem/<string:token>') #admin role
+api.add_resource(AddUserAndroid, '/api/add_user_android/<string:token>') #admin role
 api.add_resource(DeleteUser, '/api/delete_user/<string:token>') #admin role
 api.add_resource(UpdateAuth, '/api/update_auth/<string:token>') #admin role
 api.add_resource(UpdateMode, '/api/update_mode/<string:token>') #admin role

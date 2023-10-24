@@ -8,6 +8,8 @@ from functools import wraps
 import secrets
 import base64
 from flask import request
+import re
+import ipaddress
 
 atexit.register(lambda: scheduler.shutdown())
 
@@ -86,3 +88,36 @@ def validate_and_extract_data(required_fields):
     if not all(data.get(field) for field in required_fields):
         return None, {"message": f"Missing required fields: {required_fields}"}, 400
     return data, None, None
+
+def is_valid_logopass(value):
+    if len(value) == 6:
+        return False
+    return bool(re.match("^[a-zA-Z0-9]+$", value))
+
+def is_valid_serial(value):
+    if len(value) < 10:
+        return False
+    return bool(re.match("^[a-zA-Z0-9]+$", value))
+
+def is_valid_device(value):
+    if len(value) > 10:
+        return False
+    return bool(re.match("^[a-zA-Z0-9]+$", value))
+
+def is_valid_id(value):
+    if value is None:
+        return False
+    return value.isdigit()
+
+def validate_field(field_name, field_value, validation_func):
+    if not validation_func(field_value):
+        logging.warning(f"Invalid {field_name}: {field_value}")
+        return {"message": f"Invalid {field_name}"}, 422
+    return None, None
+
+def is_valid_ip(ip_str):
+    try:
+        ipaddress.ip_address(ip_str)
+        return True
+    except ValueError:
+        return False

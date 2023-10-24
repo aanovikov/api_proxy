@@ -166,9 +166,9 @@ def write_config_to_file(config):
         logging.error(f"Failed to write config to file: {str(e)}")
         return False
 
-def add_user_config(username, mode, parent_ip, http_port, socks_port, id):
+def add_user_config(username, mode, http_port, socks_port, id, parent_ip=None):
     try:
-        #logging.info(f"Attempting to add config: id{id}.")
+        logging.debug(f"Attempting to add config: id{id}.")
         ifname = id  # Interface name
 
         # Common parts for HTTP and SOCKS
@@ -181,13 +181,11 @@ def add_user_config(username, mode, parent_ip, http_port, socks_port, id):
             parent_socks = f"parent 1000 socks5 {parent_ip} 1080 android android"
             proxy = f"proxy -n -a -p{http_port}"
             socks = f"socks -n -a -p{socks_port}"
-        elif mode == "modem" and parent_ip == "none":
+        elif mode == "modem":
             parent_http = None
             parent_socks = None
             proxy = f"proxy -n -a -p{http_port} -Doid{ifname}"
             socks = f"socks -n -a -p{socks_port} -Doid{ifname}"
-        else:
-            raise ValueError("Invalid combination of mode and parent_ip")
 
         # Construct the HTTP and SOCKS blocks
         if mode == "android":
