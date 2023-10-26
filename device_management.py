@@ -3,7 +3,6 @@ import subprocess
 from subprocess import Popen, PIPE, TimeoutExpired, run
 import time
 from network_management import MODEM_HANDLERS, check_rndis_iface
-from tools import scheduler
 
 def adb_reboot_device(serial, device_id):
     adb_reboot = f"adb -s {serial} reboot"

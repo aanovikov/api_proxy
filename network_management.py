@@ -8,6 +8,7 @@ import os
 import time
 import re
 
+from celery_tasks import make_celery
 from settings import TETHERING_COORDINATES, AIRPLANE_MODE_SETTINGS
 
 AIRPLANE_ON_CMD = "su -c 'settings put global airplane_mode_on 1; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true'"
@@ -185,9 +186,11 @@ MODEM_HANDLERS = {
     }
 }
 
-def airplane_toggle_cmd(serial, delay=1):
+@celery.task
+def airplane_toggle_cmd(serial, device_model, device_id):
     try:
-        logging.info(f"Toggling airplane mode: serial: {serial}")
+        delay = 1
+        logging.info(f"Toggling airplane mode: id{device_id}, type: {device_model}, {serial}")
         adb_command = f"adb -s {serial} shell"
         child = pexpect.spawn(adb_command)
         child.expect('\$', timeout=10)
@@ -391,33 +394,58 @@ def wait_for_ip(interface_name, retries=5, delay=3):
     logging.error(f"Exceeded max retries for getting IP on interface {interface_name}")
     return '127.0.0.1'
 
+# def check_rndis_iface(device_id, serial):
+#     try:
+#         adb_command = f"adb -s {serial} shell"
+#         child = pexpect.spawn(adb_command)
+        
+#         child.expect('\$', timeout=10)
+
+#         get_iface = "ip a"
+#         child.sendline(get_iface)
+        
+#         if child.expect(['rndis0', pexpect.TIMEOUT], timeout=10) == 0:
+#             logging.info(f"RNDIS iface is ACTIVE: id{device_id}, serial: {serial}")
+#             child.sendline('exit')
+#             child.close()
+#             return True
+#         else:
+#             logging.warning(f"RNDIS iface is NOT ACTIVE: id{device_id}, serial: {serial}")
+#             child.sendline('exit')
+#             child.close()
+#             return False
+        
+#     except pexpect.exceptions.TIMEOUT:
+#         logging.error(f"Command timed out: id{device_id}, serial: {serial}")
+#         raise pexpect.exceptions.TIMEOUT("Command timed out")
+#     except Exception as e:
+#         logging.error(f"An unexpected error occurred: id{device_id}, serial: {serial}: {e}")
+#         raise e
+#     except pexpect.EOF:
+#         logging.error(f"EOF error. Device NOT found or adb issue: id{device_id}, serial: {serial}")
+#         return False
+
 def check_rndis_iface(device_id, serial):
     try:
-        adb_command = f"adb -s {serial} shell"
-        child = pexpect.spawn(adb_command)
+        rndis_status = RNDIS_STATUS.format(serial)
+        start_time = time.time()
         
-        child.expect('\$', timeout=10)
+        while time.time() - start_time <= 5:
+            result = subprocess.run(rndis_status, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            output = result.stdout.decode()
+            match = re.search(r'(rndis0|usb0):.*state (UP|DOWN)', output)
+            
+            if match:
+                interface, state = match.groups()
+                logging.info(f"RNDIS iface is ACTIVE: id{device_id}, serial: {serial}")
+                return True
+        
+        logging.warning(f"RNDIS iface is NOT ACTIVE: id{device_id}, serial: {serial}")
+        return False
 
-        get_iface = "ip a"
-        child.sendline(get_iface)
-        
-        if child.expect(['rndis0', pexpect.TIMEOUT], timeout=10) == 0:
-            logging.info(f"RNDIS iface is ACTIVE: id{device_id}, serial: {serial}")
-            child.sendline('exit')
-            child.close()
-            return True
-        else:
-            logging.warning(f"RNDIS iface is NOT ACTIVE: id{device_id}, serial: {serial}")
-            child.sendline('exit')
-            child.close()
-            return False
-        
-    except pexpect.exceptions.TIMEOUT:
+    except subprocess.TimeoutExpired:
         logging.error(f"Command timed out: id{device_id}, serial: {serial}")
-        raise pexpect.exceptions.TIMEOUT("Command timed out")
+        return False
     except Exception as e:
         logging.error(f"An unexpected error occurred: id{device_id}, serial: {serial}: {e}")
-        raise e
-    except pexpect.EOF:
-        logging.error(f"EOF error. Device NOT found or adb issue: id{device_id}, serial: {serial}")
         return False

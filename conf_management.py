@@ -396,8 +396,8 @@ def update_auth_in_config(proxy_id, username, protocol, auth_type, allow_ip):
             if within_block:
                 if "auth" in line:
                     current_auth_type = line.strip().split(" ")[1]  # auth strong -> strong
-                    if current_auth_type == auth_type:
-                        return False, "Auth type is already set to " + auth_type
+                    # if current_auth_type == auth_type:
+                    #     return False, "Auth type is already set to " + auth_type
                     line = f"auth {auth_type}\n"
                 elif "allow" in line:
                     if auth_type == "strong":
@@ -556,17 +556,17 @@ def replace_android_in_config(old_ip, new_ip, old_id, new_id, username):
         logging.error(f"An error occurred: {e}")
         return {"message": f"An error occurred: {e}", "status_code": 500}
 
-def modem_id_exists_in_config(proxy_id, username):
+def modem_id_exists_in_config(search_pattern, proxy_id, username):
     try:
         content = read_file(CONFIG_PATH)
         if content is None:
             logging.error("An error occurred while reading the config file.")
             return False
-
-        search_patterns = [
-            f"# Start http for {username} id{proxy_id}",
-            f"# Start socks for {username} id{proxy_id}"
-        ]
+        search_patterns = search_pattern
+        # search_patterns = [
+        #     f"# Start http for {username} id{proxy_id}",
+        #     f"# Start socks for {username} id{proxy_id}"
+        # ]
 
         for search_pattern in search_patterns:
             if search_pattern in ''.join(content):

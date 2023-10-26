@@ -12,13 +12,14 @@ import os
 import logging
 from ipaddress import ip_address, AddressValueError
 from dotenv import load_dotenv
-
 from device_management import adb_reboot_device, get_adb_device_status, os_boot_status
 from network_management import airplane_toggle_cmd, MODEM_HANDLERS, wait_for_ip, airplane_toggle_coordinates
 from settings import TETHERING_COORDINATES, ALLOWED_PROTOCOLS
 import tools as ts
 import storage_management as sm
 import conf_management as cm
+from celery.result import AsyncResult
+from celery_tasks import make_celery
 
 load_dotenv()
 
@@ -26,7 +27,7 @@ load_dotenv()
 
 logging.basicConfig(
     level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format='[%(asctime)s] [PID:%(process)d] [%(levelname)s] - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
@@ -35,6 +36,11 @@ parser.add_argument('interval_minutes')
 
 app = Flask(__name__)
 api = Api(app)
+
+app.config['CELERY_BROKER_URL'] = f"redis://:{os.environ.get('REDIS_PASSWORD')}@{os.environ.get('REDIS_HOST')}:{os.environ.get('REDIS_PORT')}/1"
+app.config['CELERY_RESULT_BACKEND'] = f"redis://:{os.environ.get('REDIS_PASSWORD')}@{os.environ.get('REDIS_HOST')}:{os.environ.get('REDIS_PORT')}/2"
+
+celery = make_celery(app)
 
 ACL_PATH = os.getenv('ACL_PATH')
 CONFIG_PATH = os.getenv('CONFIG_PATH')
@@ -158,6 +164,7 @@ class AutoChangeIP(Resource):
             user_data = sm.get_data_from_redis(token)
             serial = user_data.get('serial')
             device_id = user_data.get('id')
+            device = user_data.get('device')
             
             if not serial:
                 logging.error("Serial number not found in user data.")
@@ -167,35 +174,53 @@ class AutoChangeIP(Resource):
             interval_minutes = args['interval_minutes']
 
             job_id = f"changeip_{serial}"
+            lock = sm.connect_to_redis().lock(f"lock:{job_id}", timeout=60)
+            have_lock = lock.acquire(blocking=False)
 
-            # Cancel the scheduled job
-            if interval_minutes == '0':
+            task_status = AsyncResult(job_id).status
+
+            if have_lock:
                 try:
-                    ts.scheduler.remove_job(job_id)
-                    logging.info(f"Cancelled scheduled IP changes: id{device_id}, serial {serial}, token: {token}")
-                    return {'status': 'success', 'message': f'Cancelled scheduled IP changes for device: {token}'}, 200
+                    if interval_minutes == '0': # Cancel the task
+                        if task_status not in ['STARTED']:
+                            celery.control.revoke(job_id) # cancel Celery task
+                            logging.info(f"Cancelled scheduled IP changes: id{device_id}, serial {serial}, token: {token}")
+                            return {'status': 'success', 'message': f'Cancelled scheduled IP changes for device: {token}'}, 200
+                    
+                    elif task_status == 'STARTED':
+                        start_time = time()
+                        timeout = 10  # 10 seconds timeout
+                        
+                        while True:
+                            current_time = time()
+                            elapsed_time = current_time - start_time
+
+                            task_status = AsyncResult(job_id).status
+                            if task_status != 'STARTED':
+                                celery.control.revoke(job_id)
+                                logging.info(f'Task {job_id} has been revoked.')
+                                break
+                            elif elapsed_time >= timeout:
+                                celery.control.revoke(job_id, terminate=True)
+                                logging.warning(f'Task {job_id} terminated due to timeout.')
+                                break
+
+                            sleep(5)
+
+                    else:
+                        interval_minutes = int(interval_minutes)
+                        func_to_schedule = airplane_toggle_coordinates if device == 'ais' else airplane_toggle_cmd
+                        
+                        task = func_to_schedule.apply_async(args=[serial, device, device_id], countdown=interval_minutes * 60, task_id=job_id)
+                        logging.info(f'Auto changing IP every {interval_minutes} minutes for job {job_id}.')
+
                 except Exception as e:
-                    logging.error(f"Error occurred while cancelling scheduled job: {str(e)}")
+                    logging.error(f"Error occurred while scheduling or cancelling job: {str(e)}")
                     return {'status': 'failure', 'message': "Message to support"}, 500
 
-            # Schedule a new job
-            else:
-                interval_minutes = int(interval_minutes)  # Convert to int
-                try:
-                    ts.scheduler.add_job(
-                        func=airplane_toggle_cmd, 
-                        trigger='interval', 
-                        minutes=interval_minutes, 
-                        args=[serial], 
-                        id=job_id,
-                        name=job_id,
-                        replace_existing=True
-                    )
-                    logging.info(f'Auto changing IP every {interval_minutes} minutes.')
-                    return {'status': 'success', 'message': f'Auto changing IP every {interval_minutes} minutes'}, 200
-                except Exception as e:
-                    logging.error(f"Error occurred while scheduling new job: {str(e)}")
-                    return {'status': 'failure', 'message': str(e)}, 500
+                finally:
+                    if have_lock:
+                        lock.release()
 
         except Exception as e:
             logging.error(f"Error occurred in AutoChangeIP: {str(e)}")
