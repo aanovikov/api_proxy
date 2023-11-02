@@ -1199,10 +1199,10 @@ class DeviceStatus(Resource):
 
 class ChangeIP(Resource):
     def get(self, token):
-        logging.info(f"Received request to change IP for serial: {serial_number}")
         try:
             user_data = get_data_from_redis(token)
             serial_number = user_data.get('serial')
+            logging.info(f"Received request to change IP for serial: {serial_number}")
 
             if not serial_number:
                 logging.error("Serial number not found in user data.")
