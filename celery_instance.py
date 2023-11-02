@@ -1,3 +1,6 @@
+import os
+import storage_management as sm
+import logging
 import logging
 import pexpect
 import subprocess
@@ -7,8 +10,11 @@ from dotenv import load_dotenv
 import os
 import time
 import re
-from celery_instance import celery_app
 from settings import TETHERING_COORDINATES, AIRPLANE_MODE_SETTINGS
+from celery import Celery
+
+celery_app = Celery('tasks')
+celery_app.config_from_object('celery_config')
 
 AIRPLANE_ON_CMD = "su -c 'settings put global airplane_mode_on 1; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true'"
 AIRPLANE_OFF_CMD = "su -c 'settings put global airplane_mode_on 0; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false'"
@@ -21,6 +27,29 @@ ACTIVE_WINDOW = "adb -s {} shell dumpsys window windows | grep -E 'mCurrentFocus
 AIRPLANE_STATUS = "adb -s {} shell settings get global airplane_mode_on"
 SCREEN_INPUT = "adb -s {} shell input tap {} {}"
 RNDIS_STATUS="adb -s {} shell ip a | grep -E 'usb|rndis'"
+
+# @app.on_after_configure.connect
+# def setup_periodic_tasks(sender, **kwargs):
+#     # Calls test('hello') every 10 seconds.
+#     sender.add_periodic_task(30.0, dispatcher.s('C500181211155815', 'ais', '3'), name='TEST_AIS')
+
+    # Executes every Monday morning at 7:30 a.m.
+    # sender.add_periodic_task(
+    #     crontab(hour=7, minute=30, day_of_week=1),
+    #     test.s('Happy Mondays!'),
+    # )
+
+@celery_app.task
+def dispatcher(serial, device, device_id):
+    logging.debug(f'Running dispatcher with args: {serial}, {device}, {device_id}')
+    if device == 'ais':
+        logging.debug(f'RUN <airplane_toggle_coordinates> with args: {serial}, {device}, {device_id}')
+        result = airplane_toggle_coordinates(serial, device, device_id)
+    else:
+        logging.debug(f'RUN <airplane_toggle_cmd> with args: {serial}, {device}, {device_id}')
+        result = airplane_toggle_cmd(serial, device, device_id)
+    logging.info(f'Result: {result}')
+    return result
 
 def modem_toggle_coordinates(serial, device_model): # a2 and ais need to tap on the toggler
     try:
@@ -185,7 +214,7 @@ MODEM_HANDLERS = {
     }
 }
 
-@celery_app.task
+#@celery_app.task
 def airplane_toggle_cmd(serial, device_model, device_id):
     try:
         delay = 1
@@ -217,14 +246,15 @@ def airplane_toggle_cmd(serial, device_model, device_id):
         logging.error("Timeout occurred")
         raise
 
-def airplane_toggle_coordinates(serial, device_model):
+#@celery_app.task
+def airplane_toggle_coordinates(serial, device_model, device_id):
     try:
         logging.debug(f"AIRPLANE_MODE_SETTINGS: {AIRPLANE_MODE_SETTINGS}")
         if AIRPLANE_MODE_SETTINGS is None:
-            logging.error(f"AIRPLANE_MODE_SETTINGS is not defined, serial: {serial}, type: {device_model}")
+            logging.error(f"AIRPLANE_MODE_SETTINGS is not defined, serial: id{device_id}, {serial}, type: {device_model}")
             return
         if device_model not in AIRPLANE_MODE_SETTINGS:
-            logging.error(f"Invalid device: type: {device_model}, {serial}")
+            logging.error(f"Invalid device: type: {device_model}, id{device_id}, {serial}")
             return
 
         coordinates = AIRPLANE_MODE_SETTINGS.get(device_model)
@@ -327,124 +357,4 @@ def airplane_toggle_coordinates(serial, device_model):
         return False
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}, serial: {serial}")
-        return False
-
-def toggle_wifi(serial, action, delay=1, max_retries=10):
-    try:
-        logging.info(f"Toggling WiFi for device {serial}")
-
-        # Initial status check
-        adb_command = f"adb -s {serial} shell dumpsys wifi | grep 'mNetworkInfo'"
-        output = subprocess.getoutput(adb_command)
-        status = output.split('state: ')[1].split('/')[0]
-        logging.info(f"Current WiFi status: {status}")
-
-        if action == "on" and status == "CONNECTED":
-            logging.info("WiFi is already connected. No action needed.")
-            return
-        elif action == "off" and status == "DISCONNECTED":
-            logging.info("WiFi is already disconnected. No action needed.")
-            return
-
-        # Toggle WiFi
-        toggle_command = "enable" if action == "on" else "disable"
-        subprocess.run(f"adb -s {serial} shell svc wifi {toggle_command}", shell=True)
-        logging.info(f"Switched WiFi {action.upper()}. Waiting to update status...")
-
-        # Re-check status with delay and retries
-        retries = 0
-        while retries < max_retries:
-            time.sleep(delay)
-            output = subprocess.getoutput(adb_command)
-            new_status = output.split('state: ')[1].split('/')[0]
-
-            if (action == "on" and new_status == "CONNECTED") or (action == "off" and new_status == "DISCONNECTED"):
-                logging.info(f"New WiFi status: {new_status}. Done!")
-                return
-            
-            logging.info(f"Status not updated yet. Retrying... ({retries + 1}/{max_retries})")
-            retries += 1
-
-        logging.warning("Max retries reached. Exiting function.")
-
-    except Exception as e:
-        logging.error(f"An error occurred: {e}")
-        raise
-
-def get_ip_address(interface_name):
-    try:
-        ip_address = ni.ifaddresses(interface_name)[ni.AF_INET][0]['addr']
-        logging.info(f"IP address obtained: {interface_name} - {ip_address}")
-        return ip_address
-    except Exception as e:
-        logging.error(f"Couldn't fetch IP for interface {interface_name}: {str(e)}")
-        return '127.0.0.1'
-
-def wait_for_ip(interface_name, retries=5, delay=3):
-    logging.info(f"Waiting for IP with {retries} retries and {delay}s delay: {interface_name}")
-    for i in range(retries):
-        ip = get_ip_address(interface_name)
-        if ip != '127.0.0.1':
-            logging.info(f"Got a valid IP {ip} on attempt {i+1}")
-            return ip
-        logging.warning(f"Failed to get a valid IP on attempt {i+1}")
-        time.sleep(delay)
-
-    logging.error(f"Exceeded max retries for getting IP on interface {interface_name}")
-    return '127.0.0.1'
-
-# def check_rndis_iface(device_id, serial):
-#     try:
-#         adb_command = f"adb -s {serial} shell"
-#         child = pexpect.spawn(adb_command)
-        
-#         child.expect('\$', timeout=10)
-
-#         get_iface = "ip a"
-#         child.sendline(get_iface)
-        
-#         if child.expect(['rndis0', pexpect.TIMEOUT], timeout=10) == 0:
-#             logging.info(f"RNDIS iface is ACTIVE: id{device_id}, serial: {serial}")
-#             child.sendline('exit')
-#             child.close()
-#             return True
-#         else:
-#             logging.warning(f"RNDIS iface is NOT ACTIVE: id{device_id}, serial: {serial}")
-#             child.sendline('exit')
-#             child.close()
-#             return False
-        
-#     except pexpect.exceptions.TIMEOUT:
-#         logging.error(f"Command timed out: id{device_id}, serial: {serial}")
-#         raise pexpect.exceptions.TIMEOUT("Command timed out")
-#     except Exception as e:
-#         logging.error(f"An unexpected error occurred: id{device_id}, serial: {serial}: {e}")
-#         raise e
-#     except pexpect.EOF:
-#         logging.error(f"EOF error. Device NOT found or adb issue: id{device_id}, serial: {serial}")
-#         return False
-
-def check_rndis_iface(device_id, serial):
-    try:
-        rndis_status = RNDIS_STATUS.format(serial)
-        start_time = time.time()
-        
-        while time.time() - start_time <= 5:
-            result = subprocess.run(rndis_status, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
-            output = result.stdout.decode()
-            match = re.search(r'(rndis0|usb0):.*state (UP|DOWN)', output)
-            
-            if match:
-                interface, state = match.groups()
-                logging.info(f"RNDIS iface is ACTIVE: id{device_id}, serial: {serial}")
-                return True
-        
-        logging.warning(f"RNDIS iface is NOT ACTIVE: id{device_id}, serial: {serial}")
-        return False
-
-    except subprocess.TimeoutExpired:
-        logging.error(f"Command timed out: id{device_id}, serial: {serial}")
-        return False
-    except Exception as e:
-        logging.error(f"An unexpected error occurred: id{device_id}, serial: {serial}: {e}")
         return False

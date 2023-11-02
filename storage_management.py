@@ -5,6 +5,7 @@ import traceback
 from dotenv import load_dotenv
 from redis.exceptions import ResponseError, ConnectionError, TimeoutError, RedisError
 import os
+from redis.lock import Lock
 
 load_dotenv()
 
@@ -29,9 +30,10 @@ def connect_to_mysql():
         logging.error(f"Failed to connect to MySQL: {str(e)}")
         return None
 
-def connect_to_redis():
+def connect_to_redis(db=0):
     try:
-        r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, password=REDIS_PASSWORD)
+        # r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, password=REDIS_PASSWORD, db=db)
+        r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=db)
         r.ping()
         return r
     except redis.ConnectionError:
@@ -158,3 +160,18 @@ def serial_exists(target_serial):
     except Exception as e:
         logging.error(f"An unknown error occurred while communicating with Redis: {e}")
         return False
+
+def get_redis_lock(job_id, timeout=60, db=1):
+    redis_conn = connect_to_redis(db)
+    lock = None
+    acquired = False
+    if redis_conn:
+        lock = Lock(redis_conn, f"lock:{job_id}", timeout=timeout)
+        acquired = lock.acquire(blocking=False)
+        if acquired:
+            logging.debug(f"Lock acquired for {job_id}")
+        else:
+            logging.debug(f"Failed to acquire lock for {job_id}")
+    else:
+        logging.error("Failed to connect to Redis. Lock not acquired.")
+    return acquired, lock

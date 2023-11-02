@@ -3,12 +3,6 @@ from flask_restful import Resource, Api, reqparse
 from werkzeug.exceptions import BadRequest
 import time
 import os
-#import pexpect
-#import subprocess
-#from subprocess import Popen, PIPE, TimeoutExpired, run
-#import datetime
-#from threading import Lock
-#import textwrap
 import logging
 from ipaddress import ip_address, AddressValueError
 from dotenv import load_dotenv
@@ -19,7 +13,11 @@ import tools as ts
 import storage_management as sm
 import conf_management as cm
 from celery.result import AsyncResult
-from celery_tasks import make_celery
+import celery_instance as ci
+from celery_config import redis_url
+from redisbeat import RedisScheduler
+import json
+from datetime import timedelta
 
 load_dotenv()
 
@@ -32,18 +30,18 @@ logging.basicConfig(
 )
 
 parser = reqparse.RequestParser()
-parser.add_argument('interval_minutes')
+parser.add_argument('interval_seconds')
 
 app = Flask(__name__)
 api = Api(app)
 
-app.config['CELERY_BROKER_URL'] = f"redis://:{os.environ.get('REDIS_PASSWORD')}@{os.environ.get('REDIS_HOST')}:{os.environ.get('REDIS_PORT')}/1"
-app.config['CELERY_RESULT_BACKEND'] = f"redis://:{os.environ.get('REDIS_PASSWORD')}@{os.environ.get('REDIS_HOST')}:{os.environ.get('REDIS_PORT')}/2"
-
-celery = make_celery(app)
+scheduler = RedisScheduler(app=ci.celery_app, CELERY_REDIS_SCHEDULER_URL=redis_url)
 
 ACL_PATH = os.getenv('ACL_PATH')
 CONFIG_PATH = os.getenv('CONFIG_PATH')
+
+# logging.info(f'BROKER: {broker_url}')
+# logging.info(f'BACKEND: {result_backend}')
 
 class Reboot(Resource):
     #@ts.requires_role("user")
@@ -160,8 +158,13 @@ class ChangeIP(Resource):
 
 class AutoChangeIP(Resource):
     def post(self, token):
+        #task_status = None
+        have_lock = False
         try:
+            logging.info("Received request: REBOOT")
+
             user_data = sm.get_data_from_redis(token)
+            logging.debug(f"GOT data from redis, token {token}")
             serial = user_data.get('serial')
             device_id = user_data.get('id')
             device = user_data.get('device')
@@ -171,60 +174,76 @@ class AutoChangeIP(Resource):
                 return {'error': 'Serial number not found'}, 400
 
             args = parser.parse_args()
-            interval_minutes = args['interval_minutes']
+            interval_seconds = args['interval_seconds']
 
             job_id = f"changeip_{serial}"
-            lock = sm.connect_to_redis().lock(f"lock:{job_id}", timeout=60)
-            have_lock = lock.acquire(blocking=False)
+            have_lock, lock = sm.get_redis_lock(job_id, timeout=60, db=1)
+            logging.debug(f"HAVE_LOCK: {have_lock}")
+            logging.debug(f"LOCK_OBJ: {lock}")
 
-            task_status = AsyncResult(job_id).status
-
-            if have_lock:
-                try:
-                    if interval_minutes == '0': # Cancel the task
-                        if task_status not in ['STARTED']:
-                            celery.control.revoke(job_id) # cancel Celery task
-                            logging.info(f"Cancelled scheduled IP changes: id{device_id}, serial {serial}, token: {token}")
-                            return {'status': 'success', 'message': f'Cancelled scheduled IP changes for device: {token}'}, 200
-                    
-                    elif task_status == 'STARTED':
-                        start_time = time()
-                        timeout = 10  # 10 seconds timeout
-                        
-                        while True:
-                            current_time = time()
-                            elapsed_time = current_time - start_time
-
-                            task_status = AsyncResult(job_id).status
-                            if task_status != 'STARTED':
-                                celery.control.revoke(job_id)
-                                logging.info(f'Task {job_id} has been revoked.')
-                                break
-                            elif elapsed_time >= timeout:
-                                celery.control.revoke(job_id, terminate=True)
-                                logging.warning(f'Task {job_id} terminated due to timeout.')
-                                break
-
-                            sleep(5)
-
-                    else:
-                        interval_minutes = int(interval_minutes)
-                        func_to_schedule = airplane_toggle_coordinates if device == 'ais' else airplane_toggle_cmd
-                        
-                        task = func_to_schedule.apply_async(args=[serial, device, device_id], countdown=interval_minutes * 60, task_id=job_id)
-                        logging.info(f'Auto changing IP every {interval_minutes} minutes for job {job_id}.')
-
-                except Exception as e:
-                    logging.error(f"Error occurred while scheduling or cancelling job: {str(e)}")
-                    return {'status': 'failure', 'message': "Message to support"}, 500
-
-                finally:
-                    if have_lock:
-                        lock.release()
-
+            #logging.debug(f"BEFORE GET TASK STATUS")
+            #task_status = AsyncResult(job_id).status
+            #logging.debug(f"TASK STATUS: {task_status}")
+        
         except Exception as e:
-            logging.error(f"Error occurred in AutoChangeIP: {str(e)}")
-            return {'status': 'failure', 'message': str(e)}, 500
+            logging.error(f"Exception while fetching task status: {e}")
+
+        if have_lock:
+            try:
+                if interval_seconds == '0': # Cancel the task
+                    logging.debug(f"CANCELING TASK: {job_id}")
+                    if task_status not in ['STARTED']:
+                        logging.debug(f"TASK NOT STARTED, canceling imidiatelly: {job_id}: {task_status}")
+                        ci.celery_app.control.revoke(job_id) # cancel Celery task
+                        logging.info(f"Cancelled scheduled IP changes: id{device_id}, serial {serial}, token: {token}")
+                        return {'status': 'success', 'message': f'Cancelled scheduled IP changes for device: {token}'}, 200
+                
+                # elif task_status == 'STARTED':
+                    logging.debug(f"TASK STARTED, canceling in 10 sec: {job_id}: {task_status}")
+                    start_time = time()
+                    timeout = 10  # 10 seconds timeout
+                    
+                    while True:
+                        current_time = time()
+                        elapsed_time = current_time - start_time
+
+                        task_status = AsyncResult(job_id).status
+                        if task_status != 'STARTED':
+                            logging.debug(f"TASK STATUS UPDATED, canceling: {job_id}: {task_status}")
+                            ci.celery_app.control.revoke(job_id)
+                            logging.info(f'Task {job_id} has been revoked.')
+                            break
+                        elif elapsed_time >= timeout:
+                            logging.debug(f"TASK STATUS not UPDATED in 10 sec, terminating: {job_id}: {task_status}")
+                            ci.celery_app.control.revoke(job_id, terminate=True)
+                            logging.warning(f'Task {job_id} terminated due to timeout.')
+                            break
+                        logging.debug("sleep 5 sec....")
+                        sleep(2)
+
+                else:
+                    logging.debug(f"START ELSE to DO TASK: {job_id}")
+                    if not interval_seconds.isdigit() or int(interval_seconds) < 0:
+                        return {'status': 'failure', 'message': 'Invalid interval_seconds'}, 400
+                    interval_seconds = int(interval_seconds)
+                    logging.debug(f'Setting interval: {interval_seconds} sec, id{device_id}, {serial}, type: {device}')
+                    
+                    scheduler.add(**{
+                        'name': job_id,
+                        'task': 'celery_instance.dispatcher',
+                        'schedule': timedelta(seconds=interval_seconds),
+                        'args': json.dumps([serial, device, device_id]),
+                    })
+                    
+                    logging.info(f'Auto changing IP every {interval_seconds} minutes for job {job_id}.')
+
+            except Exception as e:
+                logging.error(f"Error occurred in AutoChangeIP: {str(e)}")
+                return {'status': 'failure', 'message': str(e)}, 500
+
+            finally:
+                if have_lock:
+                    lock.release()
 
 class DeleteUser(Resource):
     @ts.requires_role("admin")
