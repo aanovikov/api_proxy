@@ -1,5 +1,3 @@
-# from apscheduler.schedulers.background import BackgroundScheduler
-# from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 import redis
 import atexit
 import device_management as dm
@@ -11,33 +9,6 @@ import base64
 from flask import request
 import re
 import ipaddress
-from dotenv import load_dotenv
-
-load_dotenv()
-
-# atexit.register(lambda: scheduler.shutdown())
-
-# jobstores = {
-#     'default': SQLAlchemyJobStore(url='sqlite:///jobs.sqlite')
-# }
-
-# scheduler = BackgroundScheduler(jobstores=jobstores)
-# scheduler.start()
-#__all__ = ['scheduler']
-
-# def schedule_job(serial, device, device_id):
-#     job_id = f"modem_{serial}"    
-#     try:
-#         scheduler.add_job(
-#             dm.os_boot_status,
-#             'interval', seconds=60,
-#             args=[serial, device, device_id, True],
-#             id=job_id,
-#             replace_existing=True
-#         )
-#         logging.info(f"Added task: {job_id}, id{device_id}")
-#     except Exception as e:
-#         logging.error(f"Failed add task: {job_id}, id{device_id}, Error: {e}")
 
 def generate_short_token():
     random_bytes = secrets.token_bytes(15)  # 15 bytes should generate a 20-character token when base64 encoded

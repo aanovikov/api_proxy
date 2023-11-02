@@ -7,15 +7,12 @@ import logging
 from ipaddress import ip_address, AddressValueError
 from dotenv import load_dotenv
 from device_management import adb_reboot_device, get_adb_device_status, os_boot_status
-from network_management import airplane_toggle_cmd, MODEM_HANDLERS, wait_for_ip, airplane_toggle_coordinates
+from network_management import airplane_toggle_cmd, MODEM_HANDLERS, wait_for_ip, airplane_toggle_coordinates, dispatcher
 from settings import TETHERING_COORDINATES, ALLOWED_PROTOCOLS
 import tools as ts
 import storage_management as sm
+import schedule_management as smgr
 import conf_management as cm
-from celery.result import AsyncResult
-import celery_instance as ci
-from celery_config import redis_url
-from redisbeat import RedisScheduler
 import json
 from datetime import timedelta
 
@@ -35,10 +32,9 @@ parser.add_argument('interval_seconds')
 app = Flask(__name__)
 api = Api(app)
 
-scheduler = RedisScheduler(app=ci.celery_app, CELERY_REDIS_SCHEDULER_URL=redis_url)
-
 ACL_PATH = os.getenv('ACL_PATH')
 CONFIG_PATH = os.getenv('CONFIG_PATH')
+MODEM_UP_TIME = 60
 
 # logging.info(f'BROKER: {broker_url}')
 # logging.info(f'BACKEND: {result_backend}')
@@ -70,8 +66,20 @@ class Reboot(Resource):
                 return {'reboot': 'OK', 'message': 'Reboot is started.'}, 202
 
             if mode == "modem":
+                logging.debug(f'Running <adb_reboot_device> : id{device_id}, {serial}')
                 adb_reboot_device(serial, device_id)
-                ts.schedule_job(serial, device, device_id)
+                job_id = f'modemup_{serial}'
+                logging.debug(f'Scheduling: id{device_id}, task: {job_id}')
+                job = smgr.q.enqueue_in(
+                    timedelta(seconds=MODEM_UP_TIME),
+                    dispatcher,
+                    device,
+                    serial,
+                    job_id=job_id,
+                    on_success=smgr.report_success,
+                    on_failure=smgr.report_failure
+                )
+                logging.info(f'CREATED JOB: id{device_id}, {job_id}, switch on modem after {MODEM_UP_TIME} sec.')
                 return {'reboot': 'OK', 'message': 'Reboot is started.'}, 202
 
             logging.error(f"Unknown mode provided for device id: {device_id}, serial: {serial}.")
@@ -963,7 +971,7 @@ api.add_resource(UpdateUser, '/api/update_user/<string:token>') #admin role
 api.add_resource(ReplaceAndroid, '/api/replace_android/<string:token>') #admin role
 api.add_resource(ReplaceModem, '/api/replace_modem/<string:token>')
 #api.add_resource(ModemToggle, '/api/modem/<string:token>') #admin role
-api.add_resource(ModemStatus, '/api/modemstatus/<string:token>/<string:device_model>') #admin role
+api.add_resource(ModemStatus, '/api/modemstatus/<string:token>') #admin role
 api.add_resource(ProxyCount, '/api/proxycount/<string:token>') #admin role
 
 if __name__ == '__main__':

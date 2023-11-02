@@ -22,6 +22,13 @@ AIRPLANE_STATUS = "adb -s {} shell settings get global airplane_mode_on"
 SCREEN_INPUT = "adb -s {} shell input tap {} {}"
 RNDIS_STATUS="adb -s {} shell ip a | grep -E 'usb|rndis'"
 
+def dispatcher(device, serial):
+    func = MODEM_HANDLERS.get(device, {}).get('on')
+    if func is not None:
+        return func(serial)
+    else:
+        raise ValueError(f"No handler found for device {device} and action {action}")
+
 def modem_toggle_coordinates(serial, device_model): # a2 and ais need to tap on the toggler
     try:
         if TETHERING_COORDINATES is None:
@@ -185,7 +192,6 @@ MODEM_HANDLERS = {
     }
 }
 
-@celery_app.task
 def airplane_toggle_cmd(serial, device_model, device_id):
     try:
         delay = 1
@@ -392,37 +398,6 @@ def wait_for_ip(interface_name, retries=5, delay=3):
 
     logging.error(f"Exceeded max retries for getting IP on interface {interface_name}")
     return '127.0.0.1'
-
-# def check_rndis_iface(device_id, serial):
-#     try:
-#         adb_command = f"adb -s {serial} shell"
-#         child = pexpect.spawn(adb_command)
-        
-#         child.expect('\$', timeout=10)
-
-#         get_iface = "ip a"
-#         child.sendline(get_iface)
-        
-#         if child.expect(['rndis0', pexpect.TIMEOUT], timeout=10) == 0:
-#             logging.info(f"RNDIS iface is ACTIVE: id{device_id}, serial: {serial}")
-#             child.sendline('exit')
-#             child.close()
-#             return True
-#         else:
-#             logging.warning(f"RNDIS iface is NOT ACTIVE: id{device_id}, serial: {serial}")
-#             child.sendline('exit')
-#             child.close()
-#             return False
-        
-#     except pexpect.exceptions.TIMEOUT:
-#         logging.error(f"Command timed out: id{device_id}, serial: {serial}")
-#         raise pexpect.exceptions.TIMEOUT("Command timed out")
-#     except Exception as e:
-#         logging.error(f"An unexpected error occurred: id{device_id}, serial: {serial}: {e}")
-#         raise e
-#     except pexpect.EOF:
-#         logging.error(f"EOF error. Device NOT found or adb issue: id{device_id}, serial: {serial}")
-#         return False
 
 def check_rndis_iface(device_id, serial):
     try:
