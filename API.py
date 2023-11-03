@@ -9,7 +9,7 @@ from subprocess import Popen, PIPE, TimeoutExpired, run
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 import atexit
-import datetime
+from datetime import datetime, timedelta
 from threading import Lock
 import textwrap
 from textwrap import dedent
@@ -54,11 +54,11 @@ CONFIG_PATH = '/etc/3proxy/3proxy.cfg'
 
 REDIS_HOST = os.environ['REDIS_HOST']
 REDIS_PORT = int(os.environ['REDIS_PORT'])
-REDIS_PASSWORD = os.environ['REDIS_PASSWORD']
 
 # REDIS_HOST = 'localhost'
 # REDIS_PORT = 6379
-# REDIS_PASSWORD = 'Lyq5Rad8'
+
+CHANGE_IP_TIMEOUT = 60
 
 ALLOWED_PROTOCOLS = ['http', 'socks', 'both']
 
@@ -965,7 +965,7 @@ def connect_to_mysql():
 
 def connect_to_redis():
     try:
-        r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, password=REDIS_PASSWORD)
+        r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT)
         r.ping()
         return r
     except redis.ConnectionError:
@@ -1202,15 +1202,36 @@ class ChangeIP(Resource):
         try:
             user_data = get_data_from_redis(token)
             serial_number = user_data.get('serial')
-            logging.info(f"Received request to change IP for serial: {serial_number}")
+            device_id = user_data.get('id')
+            last_ip_change_time = user_data.get('last_ip_change_time')
+            current_time = datetime.now()
 
             if not serial_number:
                 logging.error("Serial number not found in user data.")
                 return {'error': 'Serial number not found'}, 400
 
-            logging.info(f"Received serial number: {serial_number}")
-            
+            logging.info(f"IP CHANGE REQUEST: id{device_id}, {serial_number}")
+
+            # Если last_ip_change_time не установлен, разрешаем смену IP
+            if last_ip_change_time is None:
+                logging.warning("No IP change recorded previously, proceeding with IP change.")
+
+            else:
+                last_ip_change_time = datetime.fromtimestamp(float(last_ip_change_time))
+                time_passed = current_time - last_ip_change_time
+                # Проверяем, прошло ли 30 секунд с последней смены IP
+                if time_passed < timedelta(seconds=CHANGE_IP_TIMEOUT):
+                    time_left = CHANGE_IP_TIMEOUT - int(time_passed.total_seconds())
+                    logging.warning(f"IP CHANGE LIMIT REACHED: time left: {time_left} sec., id{device_id}, {serial_number}")
+                    return {'error': f'You can only change IP once every {CHANGE_IP_TIMEOUT} seconds. Try again in {time_left} seconds.'}, 429
+
+            logging.info(f"IP CHANGING: id{device_id}, {serial_number}")
             toggle_airplane_mode(serial_number)
+
+            user_data['last_ip_change_time'] = current_time.timestamp()
+            update_data_in_redis(token, 'last_ip_change_time', user_data['last_ip_change_time'])
+
+            logging.info(f"IP CHANGED: id{device_id}, {serial_number}, timestamp {current_time}")
             return {'status': 'success', 'message': 'IP was changed'}, 200
 
         except Exception as e:
