@@ -58,7 +58,7 @@ REDIS_PORT = int(os.environ['REDIS_PORT'])
 # REDIS_HOST = 'localhost'
 # REDIS_PORT = 6379
 
-CHANGE_IP_TIMEOUT = 60
+CHANGE_IP_TIMEOUT = 30
 
 ALLOWED_PROTOCOLS = ['http', 'socks', 'both']
 
@@ -144,7 +144,7 @@ def toggle_airplane_mode(serial_number, delay=1):
 
         # Turn airplane mode ON
         airplane_on_command = "su -c 'settings put global airplane_mode_on 1; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true'"
-        logging.info(f"Executing airplane ON command: {airplane_on_command}")
+        logging.debug(f"Executing airplane ON command: {airplane_on_command}")
         child.sendline(airplane_on_command)
         child.expect_exact('Broadcast completed: result=0', timeout=10)
         
@@ -153,7 +153,7 @@ def toggle_airplane_mode(serial_number, delay=1):
 
         # Turn airplane mode OFF
         airplane_off_command = "su -c 'settings put global airplane_mode_on 0; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false'"
-        logging.info(f"Executing airplane OFF command: {airplane_off_command}")
+        logging.debug(f"Executing airplane OFF command: {airplane_off_command}")
         child.sendline(airplane_off_command)
         child.expect_exact('Broadcast completed: result=0', timeout=10)
 
