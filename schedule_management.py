@@ -1,9 +1,12 @@
 from rq import Queue, Callback
+from rq_scheduler import Scheduler
 import storage_management as sm
 import logging
 
 redis_conn = sm.connect_to_redis(db=1)
 q = Queue(connection=redis_conn)
+
+scheduler = Scheduler(queue=q, connection=redis_conn)
 
 def report_success(job, connection, result, *args, **kwargs):
     logging.info(f'SUCCESS: {job}, {result}')

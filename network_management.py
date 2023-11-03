@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 import os
 import time
 import re
-from celery_instance import celery_app
 from settings import TETHERING_COORDINATES, AIRPLANE_MODE_SETTINGS
 
 AIRPLANE_ON_CMD = "su -c 'settings put global airplane_mode_on 1; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true'"
@@ -22,8 +21,12 @@ AIRPLANE_STATUS = "adb -s {} shell settings get global airplane_mode_on"
 SCREEN_INPUT = "adb -s {} shell input tap {} {}"
 RNDIS_STATUS="adb -s {} shell ip a | grep -E 'usb|rndis'"
 
-def dispatcher(device, serial):
-    func = MODEM_HANDLERS.get(device, {}).get('on')
+def test(device_model, serial, action='TEST'):
+    logging.info(device_model, serial, action)
+    return f'TEST: {device_model}, {serial}, {action}'
+
+def dispatcher(device_model, serial, action):
+    func = MODEM_HANDLERS.get(device_model, {}).get(action)
     if func is not None:
         return func(serial)
     else:
@@ -121,7 +124,7 @@ def modem_toggle_coordinates(serial, device_model): # a2 and ais need to tap on 
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}, serial: {serial}, type: {device_model}")
 
-def modem_toggle_cmd(serial, mode):
+def modem_toggle_cmd(serial, device_model):
     try:
         if mode not in ['rndis', 'none']:
             logging.error(f"Invalid mode: {mode} for serial: {serial}. Valid: 'rndis' or 'none'")
@@ -141,14 +144,14 @@ def modem_toggle_cmd(serial, mode):
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}, serial: {serial}")
 
-def modem_get_status(serial, device_type='any'):
-    logging.info(f"Checking modem status: serial: {serial}, device model: {device_type}")
+def modem_get_status(serial, device_model):
+    logging.info(f"Checking modem status: serial: {serial}, device model: {device_model}")
 
     # Базовая команда для запроса статуса модема
     base_command = f"adb -s {serial} shell svc usb getFunction"
 
     # Изменяем команду в зависимости от типа устройства
-    if device_type == 'any':
+    if device_model in ('SM-A260G', 'J20'):
         base_command += "s"
 
     process = Popen(base_command.split(), stdout=PIPE, stderr=PIPE)
@@ -173,29 +176,64 @@ def modem_get_status(serial, device_type='any'):
         logging.error(f"Timeout modem status checking: serial {serial}")
         return "timeout"
 
+# MODEM_HANDLERS = {
+#     'any': {
+#         'on': lambda sn: modem_toggle_cmd(sn, 'rndis'),
+#         'off': lambda sn: modem_toggle_cmd(sn, 'none'),
+#         'status': lambda sn: modem_get_status(sn, 'any'),
+#         'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'any')
+#     },
+#     'a2': {
+#         'on': lambda sn: modem_toggle_coordinates(sn, 'a2'),
+#         'off': lambda sn: modem_toggle_coordinates(sn, 'a2'),
+#         'status': lambda sn: modem_get_status(sn, 'a2'),
+#         'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'a2')
+#     },
+#     'ais': {
+#         'on': lambda sn: modem_toggle_coordinates(sn, 'ais'),
+#         'off': lambda sn: modem_toggle_coordinates(sn, 'ais'),
+#         'status': lambda sn: modem_get_status(sn, 'ais'),
+#         'toggle_airplane': lambda sn: airplane_toggle_coordinates(sn, 'ais')
+#     }
+# }
+
 MODEM_HANDLERS = {
-    'any': {
-        'on': lambda sn: modem_toggle_cmd(sn, 'rndis'),
-        'off': lambda sn: modem_toggle_cmd(sn, 'none'),
-        'status': lambda sn: modem_get_status(sn, 'any')
+    'SM-A015F': {
+        'modem_on': lambda sn: modem_toggle_cmd(sn, 'rndis'),
+        'modem_off': lambda sn: modem_toggle_cmd(sn, 'none'),
+        'modem_status': lambda sn: modem_get_status(sn, 'A015F'),
+        'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'A015F')
     },
-    'a2': {
-        'on': lambda sn: modem_toggle_coordinates(sn, 'a2'),
-        'off': lambda sn: modem_toggle_coordinates(sn, 'a2'),
-        'status': lambda sn: modem_get_status(sn, 'a2')
+    'SM-A260G': {
+        'modem_on': lambda sn: modem_toggle_coordinates(sn, 'SM-A260G'),
+        'modem_off': lambda sn: modem_toggle_coordinates(sn, 'SM-A260G'),
+        'modem_status': lambda sn: modem_get_status(sn, 'SM-A260G'),
+        'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'SM-A260G')
     },
-    'ais': {
-        'on': lambda sn: modem_toggle_coordinates(sn, 'ais'),
-        'off': lambda sn: modem_toggle_coordinates(sn, 'ais'),
-        'status': lambda sn: modem_get_status(sn, 'ais'),
-        'toggle_airplane': lambda sn: airplane_toggle_coordinates(sn, 'ais')
+    '5033D_RU': {
+        'modem_on': lambda sn: modem_toggle_cmd(sn, 'rndis'),
+        'modem_off': lambda sn: modem_toggle_cmd(sn, 'none'),
+        'modem_status': lambda sn: modem_get_status(sn, '5033D_RU'),
+        'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, '5033D_RU')
+    },
+    'Kingcomm C500': {
+        'modem_on': lambda sn: modem_toggle_coordinates(sn, 'Kingcomm C500'),
+        'modem_off': lambda sn: modem_toggle_coordinates(sn, 'Kingcomm C500'),
+        'modem_status': lambda sn: modem_get_status(sn, 'Kingcomm C500'),
+        'toggle_airplane': lambda sn: airplane_toggle_coordinates(sn, 'Kingcomm C500')
+    },
+    'J20': {
+        'modem_on': lambda sn: modem_toggle_cmd(sn, 'rndis'),
+        'modem_off': lambda sn: modem_toggle_cmd(sn, 'none'),
+        'modem_status': lambda sn: modem_get_status(sn, 'J20'),
+        'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'J20')
     }
 }
 
-def airplane_toggle_cmd(serial, device_model, device_id):
+def airplane_toggle_cmd(serial, device_model):
     try:
         delay = 1
-        logging.info(f"Toggling airplane mode: id{device_id}, type: {device_model}, {serial}")
+        logging.info(f"Toggling airplane mode: type: {device_model}, {serial}")
         adb_command = f"adb -s {serial} shell"
         child = pexpect.spawn(adb_command)
         child.expect('\$', timeout=10)

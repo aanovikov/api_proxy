@@ -7,14 +7,14 @@ import logging
 from ipaddress import ip_address, AddressValueError
 from dotenv import load_dotenv
 from device_management import adb_reboot_device, get_adb_device_status, os_boot_status
-from network_management import airplane_toggle_cmd, MODEM_HANDLERS, wait_for_ip, airplane_toggle_coordinates, dispatcher
+from network_management import test, airplane_toggle_cmd, MODEM_HANDLERS, wait_for_ip, airplane_toggle_coordinates, dispatcher, TETHER_SETTINGS
 from settings import TETHERING_COORDINATES, ALLOWED_PROTOCOLS
 import tools as ts
 import storage_management as sm
 import schedule_management as smgr
 import conf_management as cm
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 load_dotenv()
 
@@ -35,6 +35,7 @@ api = Api(app)
 ACL_PATH = os.getenv('ACL_PATH')
 CONFIG_PATH = os.getenv('CONFIG_PATH')
 MODEM_UP_TIME = 60
+CHANGE_IP_TIMEOUT = 30
 
 # logging.info(f'BROKER: {broker_url}')
 # logging.info(f'BACKEND: {result_backend}')
@@ -72,7 +73,7 @@ class Reboot(Resource):
                 logging.debug(f'Scheduling: id{device_id}, task: {job_id}')
                 job = smgr.q.enqueue_in(
                     timedelta(seconds=MODEM_UP_TIME),
-                    dispatcher,
+                    test,
                     device,
                     serial,
                     job_id=job_id,
@@ -139,12 +140,29 @@ class ChangeIP(Resource):
             device = user_data.get('device')
             username = user_data.get('username')
             id = user_data.get('id')
-            logging.info(f"Received request: CHANGE IP, id{id}, user {username}, {serial}")
+            last_ip_change_time = user_data.get('last_ip_change_time')
+            current_time = datetime.now()
+
+            logging.info(f"IP CHANGE REQUEST: id{id}, user {username}, {serial}")
 
             if not serial:
-                logging.error("Serial not found in user data.")
+                logging.error(f"Serial NOT found in redis: id{id}, user {username}, serial: {serial}")
                 return {'error': 'Serial not found'}, 400
             
+            # Если last_ip_change_time не установлен, разрешаем смену IP
+            if last_ip_change_time is None:
+                logging.warning("No IP change recorded previously, proceeding with IP change.")
+
+            else:
+                last_ip_change_time = datetime.fromtimestamp(float(last_ip_change_time))
+                time_passed = current_time - last_ip_change_time
+                # Проверяем, прошло ли 30 секунд с последней смены IP
+                if time_passed < timedelta(seconds=CHANGE_IP_TIMEOUT):
+                    time_left = CHANGE_IP_TIMEOUT - int(time_passed.total_seconds())
+                    logging.warning(f"IP CHANGE LIMIT REACHED: time left: {time_left} sec., id{id}, {serial}")
+                    return {'error': f'You can only change IP once every {CHANGE_IP_TIMEOUT} seconds. Try again in {time_left} seconds.'}, 429
+                user_data['last_ip_change_time'] = current_time.timestamp()
+                
             # Check if device is 'ais'
             if device == 'ais':
                 logging.info(f"Airplane on\off via TOUCH: id{id}, user {username}, {serial}")
@@ -155,9 +173,13 @@ class ChangeIP(Resource):
                     return {'error': 'Operation not supported for this device'}, 400
             else:
                 logging.info(f"Airplane on\off via CMD: id{id}, user {username}, {serial}")
-                airplane_toggle_cmd(serial)
+                airplane_toggle_cmd(serial, device, id)
+            
+            fields_to_update = {'last_ip_change_time': user_data['last_ip_change_time']}
+            sm.update_data_in_redis(token, fields_to_update)
+            logging.debug(f"Updated data for token: {token} with the following fields: {fields_to_update}")
 
-            logging.info(f"Airplane switching DONE: id{id}, user {username}, {serial}")
+            logging.info(f"IP CHANGED: id{id}, user {username}, {serial}")
             return {'status': 'success', 'message': 'IP was changed'}, 200
 
         except Exception as e:
@@ -169,13 +191,14 @@ class AutoChangeIP(Resource):
         #task_status = None
         have_lock = False
         try:
-            logging.info("Received request: REBOOT")
+            logging.info("Received request: SET IP AUTO CHANGE")
 
             user_data = sm.get_data_from_redis(token)
             logging.debug(f"GOT data from redis, token {token}")
             serial = user_data.get('serial')
             device_id = user_data.get('id')
-            device = user_data.get('device')
+            device_model = user_data.get('device')
+            action = 'toggle_airplane'
             
             if not serial:
                 logging.error("Serial number not found in user data.")
@@ -185,73 +208,26 @@ class AutoChangeIP(Resource):
             interval_seconds = args['interval_seconds']
 
             job_id = f"changeip_{serial}"
-            have_lock, lock = sm.get_redis_lock(job_id, timeout=60, db=1)
-            logging.debug(f"HAVE_LOCK: {have_lock}")
-            logging.debug(f"LOCK_OBJ: {lock}")
+            logging.debug(f'Scheduling: id{device_id}, model: {device_model}')
 
-            #logging.debug(f"BEFORE GET TASK STATUS")
-            #task_status = AsyncResult(job_id).status
-            #logging.debug(f"TASK STATUS: {task_status}")
-        
+            smgr.scheduler.schedule(
+                scheduled_time=datetime.utcnow(),  # Time for first execution, in UTC timezone
+                func=dispatcher,                # Function to be queued
+                args=[device_model, serial, action],
+                interval=interval_seconds,         # Time before the function is called again, in seconds (300 seconds = 5 minutes)
+                repeat=10,                        # Repeat forever
+                id=job_id
+            )
+            
+            logging.info(f'Auto changing IP: id{device_id}, interval: {interval_seconds} sec.')
+            time.sleep(1)
+            list_of_job_instances = list(smgr.scheduler.get_jobs())
+            for job in list_of_job_instances:
+                logging.info(f"Job ID: {job.id}, Enqueued At: {job.enqueued_at}, Created At: {job.created_at}, Status: {job.get_status()}")
+
         except Exception as e:
-            logging.error(f"Exception while fetching task status: {e}")
-
-        if have_lock:
-            try:
-                if interval_seconds == '0': # Cancel the task
-                    logging.debug(f"CANCELING TASK: {job_id}")
-                    if task_status not in ['STARTED']:
-                        logging.debug(f"TASK NOT STARTED, canceling imidiatelly: {job_id}: {task_status}")
-                        ci.celery_app.control.revoke(job_id) # cancel Celery task
-                        logging.info(f"Cancelled scheduled IP changes: id{device_id}, serial {serial}, token: {token}")
-                        return {'status': 'success', 'message': f'Cancelled scheduled IP changes for device: {token}'}, 200
-                
-                # elif task_status == 'STARTED':
-                    logging.debug(f"TASK STARTED, canceling in 10 sec: {job_id}: {task_status}")
-                    start_time = time()
-                    timeout = 10  # 10 seconds timeout
-                    
-                    while True:
-                        current_time = time()
-                        elapsed_time = current_time - start_time
-
-                        task_status = AsyncResult(job_id).status
-                        if task_status != 'STARTED':
-                            logging.debug(f"TASK STATUS UPDATED, canceling: {job_id}: {task_status}")
-                            ci.celery_app.control.revoke(job_id)
-                            logging.info(f'Task {job_id} has been revoked.')
-                            break
-                        elif elapsed_time >= timeout:
-                            logging.debug(f"TASK STATUS not UPDATED in 10 sec, terminating: {job_id}: {task_status}")
-                            ci.celery_app.control.revoke(job_id, terminate=True)
-                            logging.warning(f'Task {job_id} terminated due to timeout.')
-                            break
-                        logging.debug("sleep 5 sec....")
-                        sleep(2)
-
-                else:
-                    logging.debug(f"START ELSE to DO TASK: {job_id}")
-                    if not interval_seconds.isdigit() or int(interval_seconds) < 0:
-                        return {'status': 'failure', 'message': 'Invalid interval_seconds'}, 400
-                    interval_seconds = int(interval_seconds)
-                    logging.debug(f'Setting interval: {interval_seconds} sec, id{device_id}, {serial}, type: {device}')
-                    
-                    scheduler.add(**{
-                        'name': job_id,
-                        'task': 'celery_instance.dispatcher',
-                        'schedule': timedelta(seconds=interval_seconds),
-                        'args': json.dumps([serial, device, device_id]),
-                    })
-                    
-                    logging.info(f'Auto changing IP every {interval_seconds} minutes for job {job_id}.')
-
-            except Exception as e:
-                logging.error(f"Error occurred in AutoChangeIP: {str(e)}")
-                return {'status': 'failure', 'message': str(e)}, 500
-
-            finally:
-                if have_lock:
-                    lock.release()
+            logging.error(f"Error occurred in AutoChangeIP: {str(e)}")
+            return {'status': 'failure', 'message': str(e)}, 500
 
 class DeleteUser(Resource):
     @ts.requires_role("admin")
