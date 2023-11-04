@@ -7,12 +7,12 @@ import logging
 from ipaddress import ip_address, AddressValueError
 from dotenv import load_dotenv
 from device_management import adb_reboot_device, get_adb_device_status, os_boot_status
-from network_management import test, airplane_toggle_cmd, MODEM_HANDLERS, wait_for_ip, airplane_toggle_coordinates, dispatcher, TETHER_SETTINGS
+from network_management import dispatcher, airplane_toggle_cmd, MODEM_HANDLERS, wait_for_ip, airplane_toggle_coordinates, TETHER_SETTINGS
 from settings import TETHERING_COORDINATES, ALLOWED_PROTOCOLS
 import tools as ts
 import storage_management as sm
-from rq_scheduler.scheduler import Scheduler
 import conf_management as cm
+from rq_scheduler.scheduler import Scheduler, Queue
 import json
 from datetime import datetime, timedelta
 
@@ -34,13 +34,12 @@ api = Api(app)
 
 ACL_PATH = os.getenv('ACL_PATH')
 CONFIG_PATH = os.getenv('CONFIG_PATH')
-MODEM_UP_TIME = 60
+MODEM_UP_TIME = 1
 CHANGE_IP_TIMEOUT = 30
+ALLOWED_INTERVAL = 30
 
 redis_conn = sm.connect_to_redis(db=1)
-q = Queue(connection=redis_conn)
-
-scheduler = Scheduler(queue=q, connection=redis_conn)
+scheduler = Scheduler(connection=redis_conn, interval=30)
 
 class Reboot(Resource):
     #@ts.requires_role("user")
@@ -53,6 +52,8 @@ class Reboot(Resource):
             device = user_data.get('device')
             mode = user_data.get('mode')
             device_id = user_data.get('id')  # Getting from Redis
+            job_id = f'modemup_{serial}'
+            action = 'modem_on'
 
             if not serial:
                 logging.error(f"Serial: {serial} NOT found in redis.")
@@ -69,21 +70,12 @@ class Reboot(Resource):
                 return {'reboot': 'OK', 'message': 'Reboot is started.'}, 202
 
             if mode == "modem":
-                logging.debug(f'Running <adb_reboot_device> : id{device_id}, {serial}')
+                logging.info(f'Rebooting: id{device_id}, {serial}')
                 adb_reboot_device(serial, device_id)
-                job_id = f'modemup_{serial}'
                 logging.debug(f'Scheduling: id{device_id}, task: {job_id}')
-                job = rqs.q.enqueue_in(
-                    timedelta(seconds=MODEM_UP_TIME),
-                    test,
-                    device,
-                    serial,
-                    job_id=job_id,
-                    on_success=rqs.report_success,
-                    on_failure=rqs.report_failure
-                )
-                logging.info(f'CREATED JOB: id{device_id}, {job_id}, switch on modem after {MODEM_UP_TIME} sec.')
-                return {'reboot': 'OK', 'message': 'Reboot is started.'}, 202
+                scheduler.enqueue_in(timedelta(minutes=MODEM_UP_TIME), dispatcher, device, serial, action, job_id=job_id)
+                logging.info(f'CREATED JOB: id{device_id}, {job_id}, switch on modem in {MODEM_UP_TIME} min.')
+                return {'reboot': 'OK', 'message': 'Reboot is started, wait 1 minute.'}, 200
 
             logging.error(f"Unknown mode provided for device id: {device_id}, serial: {serial}.")
             return {'error': 'Unknown mode provided'}, 400
@@ -206,19 +198,26 @@ class AutoChangeIP(Resource):
                 return {'error': 'Serial number not found'}, 400
 
             args = parser.parse_args()
-            interval_seconds = args['interval_seconds']
+            interval_seconds = int(args['interval_seconds'])
+
+            def check_job_exists(scheduler, job_id):
+                for job in scheduler.get_jobs():
+                    if job.id == job_id:
+                        return True  # Job found
+                return False  # Job not found
 
             # Obtain a lock to prevent concurrent modifications by other schedulers or workers
             with scheduler.connection.lock(job_id):
-                if job_id in scheduler.job_ids:  # Checking if job exists
+                if check_job_exists(scheduler, job_id):  # Checking if job exists
                     if interval_seconds == 0:
                         scheduler.cancel(job_id)  # cancel job if interval_seconds == 0
                         # Verify job cancellation
-                        if job_id not in scheduler.job_ids:
+                        if not check_job_exists(scheduler, job_id):
                             logging.info(f'IP ROTATION CANCELED: {job_id}, id{device_id}, model: {device_model}')
+                            return {'status': 'success', 'message': f'IP rotation canceled'}, 200
                         else:
                             logging.error(f'IP ROTATION CANCELLATION FAILED: {job_id}, id{device_id}, model: {device_model}')
-                    elif interval_seconds > 30:
+                    elif interval_seconds >= ALLOWED_INTERVAL:
                         # cancel existing job and create a new one with updated interval
                         scheduler.cancel(job_id)
                         scheduler.schedule(
@@ -230,12 +229,13 @@ class AutoChangeIP(Resource):
                             id=job_id
                         )
                         # Verify job update
-                        if job_id in scheduler.job_ids:
+                        if check_job_exists(scheduler, job_id):
                             logging.info(f'IP ROTATION UPDATED: {job_id}, id{device_id}, model: {device_model}, interval: {interval_seconds} sec.')
+                            return {'status': 'success', 'message': f'IP rotation updated: interval {interval_seconds} sec'}, 200
                         else:
                             logging.error(f'IP ROTATION UPDATE FAILED: {job_id}, id{device_id}, model: {device_model}')
                 else:
-                    if interval_seconds > 30:
+                    if interval_seconds >= ALLOWED_INTERVAL:
                         # create a new job as it doesn't exist
                         scheduler.schedule(
                             scheduled_time=datetime.utcnow(),
@@ -246,8 +246,9 @@ class AutoChangeIP(Resource):
                             id=job_id
                         )
                         # Verify job creation
-                        if job_id in scheduler.job_ids:
+                        if check_job_exists(scheduler, job_id):
                             logging.info(f'IP ROTATION SCHEDULED: {job_id}, id{device_id}, model: {device_model}, interval: {interval_seconds} sec.')
+                            return {'status': 'success', 'message': f'IP rotation scheduled: interval {interval_seconds} sec'}, 200
                         else:
                             logging.error(f'IP ROTATION SCHEDULING FAILED: {job_id}, id{device_id}, model: {device_model}')
                     elif interval_seconds == 0:
@@ -329,7 +330,7 @@ class DeleteUser(Resource):
                 device = user_data.get('device')
                 device_id = user_data.get('id')
 
-                status_handler = MODEM_HANDLERS.get(device, {}).get('status')
+                status_handler = MODEM_HANDLERS.get(device, {}).get('modem_status')
                 status = status_handler(serial) if status_handler else None
 
                 if status == "device_not_found":
@@ -337,7 +338,7 @@ class DeleteUser(Resource):
                 elif status == "timeout":
                     logging.error(f"Device timed out, possibly it has lost connection: id{device_id}, serial: {serial}")
                 elif status == "rndis":
-                    MODEM_HANDLERS[device]['off'](serial)
+                    MODEM_HANDLERS[device]['modem_off'](serial)
                     logging.info(f"RNDIS OFF: id{device_id}, serial: {serial}")
                 else:
                     logging.warning(f"NOT in RNDIS: {status}: id{device_id}, serial: {serial}")
@@ -516,7 +517,7 @@ class AddUserModem(Resource):
                 'username': ts.is_valid_logopass,
                 'password': ts.is_valid_logopass,
                 'serial': ts.is_valid_serial,
-                'device': ts.is_valid_device,
+                #'device': ts.is_valid_device,
                 'http_port': ts.is_valid_port,
                 'socks_port': ts.is_valid_port,
                 'id': ts.is_valid_id
@@ -534,7 +535,7 @@ class AddUserModem(Resource):
 
             logging.info(f"Redis check OK: {user_data['username']}")
             
-            status_handler = MODEM_HANDLERS.get(user_data['device'], {}).get('status')
+            status_handler = MODEM_HANDLERS.get(user_data['device'], {}).get('modem_status')
             status = status_handler(user_data['serial']) if status_handler else None
 
             if status == "device_not_found":
@@ -551,7 +552,7 @@ class AddUserModem(Resource):
                     logging.info(f"Modem is already on, IP: {ip_address}")
 
             else:
-                handler = MODEM_HANDLERS.get(user_data['device'], {}).get('on')
+                handler = MODEM_HANDLERS.get(user_data['device'], {}).get('modem_on')
                 logging.debug(f'HANDLER 1: {handler}')
                 handler(user_data['serial'])
                 interface_name = f"id{user_data['id']}"
@@ -652,7 +653,7 @@ class AddUserAndroid(Resource):
             logging.info(f"Redis check OK: {user_data['username']}")
 
             #checking modem
-            status_handler = MODEM_HANDLERS.get(user_data['device'], {}).get('status')
+            status_handler = MODEM_HANDLERS.get(user_data['device'], {}).get('modem_status')
             status = status_handler(user_data['serial']) if status_handler else None
             
             if status == "device_not_found":
@@ -663,7 +664,7 @@ class AddUserAndroid(Resource):
                 return {"message": "Device timed out, possibly it has lost connection"}, 500
 
             if status == "rndis":
-                handler = MODEM_HANDLERS.get(user_data['device'], {}).get('off')
+                handler = MODEM_HANDLERS.get(user_data['device'], {}).get('modem_off')
                 handler(user_data['serial'])
                 logging.info("Modem turned off successfully")
             else:
@@ -949,7 +950,7 @@ class ModemStatus(Resource):
         try:
             logging.info("Received request: CHECK MODEM STATUS.")
 
-            handler = MODEM_HANDLERS.get(device_model, {}).get('status')
+            handler = MODEM_HANDLERS.get(device_model, {}).get('modem_status')
             if not handler:
                 logging.error("Invalid device model provided. Use a correct 'device' field.")
                 return {"message": "Invalid device model provided. Use a correct 'device' field."}, 400

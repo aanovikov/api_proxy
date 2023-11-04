@@ -27,7 +27,7 @@ class Scheduler(object):
     queue_class = Queue
     job_class = Job
 
-    def __init__(self, queue_name='default', queue=None, interval=60, connection=None,
+    def __init__(self, queue_name='default', queue=None, interval=None, connection=None,
                  job_class=None, queue_class=None, name=None):
         from rq.connections import resolve_connection
         self.connection = resolve_connection(connection)
