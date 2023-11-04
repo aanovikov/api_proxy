@@ -11,7 +11,7 @@ from network_management import test, airplane_toggle_cmd, MODEM_HANDLERS, wait_f
 from settings import TETHERING_COORDINATES, ALLOWED_PROTOCOLS
 import tools as ts
 import storage_management as sm
-import schedule_management as smgr
+from rq_scheduler.scheduler import Scheduler
 import conf_management as cm
 import json
 from datetime import datetime, timedelta
@@ -37,8 +37,10 @@ CONFIG_PATH = os.getenv('CONFIG_PATH')
 MODEM_UP_TIME = 60
 CHANGE_IP_TIMEOUT = 30
 
-# logging.info(f'BROKER: {broker_url}')
-# logging.info(f'BACKEND: {result_backend}')
+redis_conn = sm.connect_to_redis(db=1)
+q = Queue(connection=redis_conn)
+
+scheduler = Scheduler(queue=q, connection=redis_conn)
 
 class Reboot(Resource):
     #@ts.requires_role("user")
@@ -71,14 +73,14 @@ class Reboot(Resource):
                 adb_reboot_device(serial, device_id)
                 job_id = f'modemup_{serial}'
                 logging.debug(f'Scheduling: id{device_id}, task: {job_id}')
-                job = smgr.q.enqueue_in(
+                job = rqs.q.enqueue_in(
                     timedelta(seconds=MODEM_UP_TIME),
                     test,
                     device,
                     serial,
                     job_id=job_id,
-                    on_success=smgr.report_success,
-                    on_failure=smgr.report_failure
+                    on_success=rqs.report_success,
+                    on_failure=rqs.report_failure
                 )
                 logging.info(f'CREATED JOB: id{device_id}, {job_id}, switch on modem after {MODEM_UP_TIME} sec.')
                 return {'reboot': 'OK', 'message': 'Reboot is started.'}, 202
@@ -188,8 +190,6 @@ class ChangeIP(Resource):
 
 class AutoChangeIP(Resource):
     def post(self, token):
-        #task_status = None
-        have_lock = False
         try:
             logging.info("Received request: SET IP AUTO CHANGE")
 
@@ -199,31 +199,61 @@ class AutoChangeIP(Resource):
             device_id = user_data.get('id')
             device_model = user_data.get('device')
             action = 'toggle_airplane'
-            
+            job_id = f"changeip_{serial}"
+
             if not serial:
-                logging.error("Serial number not found in user data.")
+                logging.error("Serial number not found in user_data.")
                 return {'error': 'Serial number not found'}, 400
 
             args = parser.parse_args()
             interval_seconds = args['interval_seconds']
 
-            job_id = f"changeip_{serial}"
-            logging.debug(f'Scheduling: id{device_id}, model: {device_model}')
-
-            smgr.scheduler.schedule(
-                scheduled_time=datetime.utcnow(),  # Time for first execution, in UTC timezone
-                func=dispatcher,                # Function to be queued
-                args=[device_model, serial, action],
-                interval=interval_seconds,         # Time before the function is called again, in seconds (300 seconds = 5 minutes)
-                repeat=10,                        # Repeat forever
-                id=job_id
-            )
-            
-            logging.info(f'Auto changing IP: id{device_id}, interval: {interval_seconds} sec.')
-            time.sleep(1)
-            list_of_job_instances = list(smgr.scheduler.get_jobs())
-            for job in list_of_job_instances:
-                logging.info(f"Job ID: {job.id}, Enqueued At: {job.enqueued_at}, Created At: {job.created_at}, Status: {job.get_status()}")
+            # Obtain a lock to prevent concurrent modifications by other schedulers or workers
+            with scheduler.connection.lock(job_id):
+                if job_id in scheduler.job_ids:  # Checking if job exists
+                    if interval_seconds == 0:
+                        scheduler.cancel(job_id)  # cancel job if interval_seconds == 0
+                        # Verify job cancellation
+                        if job_id not in scheduler.job_ids:
+                            logging.info(f'IP ROTATION CANCELED: {job_id}, id{device_id}, model: {device_model}')
+                        else:
+                            logging.error(f'IP ROTATION CANCELLATION FAILED: {job_id}, id{device_id}, model: {device_model}')
+                    elif interval_seconds > 30:
+                        # cancel existing job and create a new one with updated interval
+                        scheduler.cancel(job_id)
+                        scheduler.schedule(
+                            scheduled_time=datetime.utcnow(),
+                            func=dispatcher,
+                            args=[device_model, serial, action],
+                            interval=interval_seconds,
+                            repeat=None,  # Repeat forever
+                            id=job_id
+                        )
+                        # Verify job update
+                        if job_id in scheduler.job_ids:
+                            logging.info(f'IP ROTATION UPDATED: {job_id}, id{device_id}, model: {device_model}, interval: {interval_seconds} sec.')
+                        else:
+                            logging.error(f'IP ROTATION UPDATE FAILED: {job_id}, id{device_id}, model: {device_model}')
+                else:
+                    if interval_seconds > 30:
+                        # create a new job as it doesn't exist
+                        scheduler.schedule(
+                            scheduled_time=datetime.utcnow(),
+                            func=dispatcher,
+                            args=[device_model, serial, action],
+                            interval=interval_seconds,
+                            repeat=None,  # Repeat forever
+                            id=job_id
+                        )
+                        # Verify job creation
+                        if job_id in scheduler.job_ids:
+                            logging.info(f'IP ROTATION SCHEDULED: {job_id}, id{device_id}, model: {device_model}, interval: {interval_seconds} sec.')
+                        else:
+                            logging.error(f'IP ROTATION SCHEDULING FAILED: {job_id}, id{device_id}, model: {device_model}')
+                    elif interval_seconds == 0:
+                        logging.warning(f'IP ROTATION NOT FOUND TO CANCEL: {job_id}, id{device_id}, model: {device_model}')
+                    else:
+                        logging.warning(f'INVALID INTERVAL: Interval cannot be less than 30 seconds. {job_id}, id{device_id}, model: {device_model}')
 
         except Exception as e:
             logging.error(f"Error occurred in AutoChangeIP: {str(e)}")
