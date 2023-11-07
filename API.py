@@ -632,7 +632,10 @@ class AddUserModem(Resource):
                 logging.info(f"Added data to redis: {user_data['username']}, id{user_data['id']}.")
 
                 logging.info(f"User added: {user_data['username']}")
-                return {"message": f"User added: {user_data['username']}, token: {token}"}, 201
+                return {
+                    "message": f"User added successfully: {user_data['username']}",
+                    "token": token
+                }, 201
         
         except BadRequest:
             logging.error("Bad request, possibly malformed JSON.")
