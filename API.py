@@ -551,7 +551,7 @@ class AddUserModem(Resource):
 
             #validating data
             fields_to_validate = {
-                'username': ts.is_valid_logopass,
+                # 'username': ts.is_valid_logopass,
                 'password': ts.is_valid_logopass,
                 'serial': ts.is_valid_serial,
                 #'device': ts.is_valid_device,
