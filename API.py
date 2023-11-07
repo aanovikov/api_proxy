@@ -550,20 +550,20 @@ class AddUserModem(Resource):
             user_data['mode'] = 'modem'
 
             #validating data
-            fields_to_validate = {
-                # 'username': ts.is_valid_logopass,
-                'password': ts.is_valid_logopass,
-                'serial': ts.is_valid_serial,
-                #'device': ts.is_valid_device,
-                'http_port': ts.is_valid_port,
-                'socks_port': ts.is_valid_port,
-                'id': ts.is_valid_id
-            }
+            # fields_to_validate = {
+            #     # 'username': ts.is_valid_logopass,
+            #     # 'password': ts.is_valid_logopass,
+            #     # 'serial': ts.is_valid_serial,
+            #     #'device': ts.is_valid_device,
+            #     # 'http_port': ts.is_valid_port,
+            #     # 'socks_port': ts.is_valid_port,
+            #     # 'id': ts.is_valid_id
+            # }
 
-            for field, validation_func in fields_to_validate.items():
-                error_message, error_code = ts.validate_field(field, user_data[field], validation_func)
-                if error_message:
-                    return error_message, error_code
+            # for field, validation_func in fields_to_validate.items():
+            #     error_message, error_code = ts.validate_field(field, user_data[field], validation_func)
+            #     if error_message:
+            #         return error_message, error_code
 
             #check existing in redis
             if sm.serial_exists(user_data['serial']):
