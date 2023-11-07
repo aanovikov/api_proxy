@@ -147,7 +147,7 @@ def modem_get_status(serial, device_model):
     base_command = f"adb -s {serial} shell svc usb getFunction"
 
     # Изменяем команду в зависимости от типа устройства
-    if device_model in ('SM-A015F', 'J20', '5033D_RU'):
+    if device_model in ('SM-A015F', 'J20', '5033D_RU', 'SM-J400F'):
         base_command += "s"
 
     process = Popen(base_command.split(), stdout=PIPE, stderr=PIPE)
@@ -171,27 +171,6 @@ def modem_get_status(serial, device_model):
         process.kill()
         logging.error(f"Timeout modem status checking: serial {serial}")
         return "timeout"
-
-# MODEM_HANDLERS = {
-#     'any': {
-#         'on': lambda sn: modem_toggle_cmd(sn, 'rndis'),
-#         'off': lambda sn: modem_toggle_cmd(sn, 'none'),
-#         'status': lambda sn: modem_get_status(sn, 'any'),
-#         'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'any')
-#     },
-#     'a2': {
-#         'on': lambda sn: modem_toggle_coordinates(sn, 'a2'),
-#         'off': lambda sn: modem_toggle_coordinates(sn, 'a2'),
-#         'status': lambda sn: modem_get_status(sn, 'a2'),
-#         'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'a2')
-#     },
-#     'ais': {
-#         'on': lambda sn: modem_toggle_coordinates(sn, 'ais'),
-#         'off': lambda sn: modem_toggle_coordinates(sn, 'ais'),
-#         'status': lambda sn: modem_get_status(sn, 'ais'),
-#         'toggle_airplane': lambda sn: airplane_toggle_coordinates(sn, 'ais')
-#     }
-# }
 
 MODEM_HANDLERS = {
     'SM-A015F': {
@@ -223,6 +202,18 @@ MODEM_HANDLERS = {
         'modem_off': lambda sn: modem_toggle_cmd(sn, 'none'),
         'modem_status': lambda sn: modem_get_status(sn, 'J20'),
         'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'J20')
+    },
+    'Alpha 5G': {
+        'modem_on': lambda sn: modem_toggle_coordinates(sn, 'Alpha 5G'),
+        'modem_off': lambda sn: modem_toggle_coordinates(sn, 'Alpha 5G'),
+        'modem_status': lambda sn: modem_get_status(sn, 'Alpha 5G'),
+        'toggle_airplane': lambda sn: airplane_toggle_coordinates(sn, 'Alpha 5G')
+    },
+    'SM-J400F': {
+        'modem_on': lambda sn: modem_toggle_coordinates(sn, 'SM-J400F'),
+        'modem_off': lambda sn: modem_toggle_coordinates(sn, 'SM-J400F'),
+        'modem_status': lambda sn: modem_get_status(sn, 'SM-J400F'),
+        'toggle_airplane': lambda sn: airplane_toggle_coordinates(sn, 'SM-J400F')
     }
 }
 

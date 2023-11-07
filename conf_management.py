@@ -9,6 +9,7 @@ load_dotenv()
 
 ACL_PATH = os.getenv('ACL_PATH')
 CONFIG_PATH = os.getenv('CONFIG_PATH')
+CHECKER_IP = '91.107.207.227'
 
 def read_file(filepath):
     try:
@@ -73,7 +74,7 @@ def remove_user_from_acl(username):
 
 def update_user_in_acl(old_username, new_username, old_password, new_password, proxy_id):
     try:
-        logging.info(f"Updating user in ACL: id{proxy_id}: {old_username} --> {new_username}, {old_password} --> {new_password}")
+        logging.info(f"Updating user in ACL: {old_username} --> {new_username}, {old_password} --> {new_password}")
 
         users = read_file(ACL_PATH)
         if users is None:
@@ -166,9 +167,9 @@ def write_config_to_file(config):
         logging.error(f"Failed to write config to file: {str(e)}")
         return False
 
-def add_user_config(username, mode, http_port, socks_port, id, parent_ip=None):
+def add_user_config(username, mode, http_port, socks_port, id, tgname, parent_ip=None):
     try:
-        logging.debug(f"Attempting to add config: id{id}.")
+        logging.debug(f"ADDING CONFIG: id{id}.")
         ifname = id  # Interface name
 
         # Common parts for HTTP and SOCKS
@@ -190,39 +191,39 @@ def add_user_config(username, mode, http_port, socks_port, id, parent_ip=None):
         # Construct the HTTP and SOCKS blocks
         if mode == "android":
             http_parts = [
-                f"# Start http for {username} id{id}",
+                f"# Start http for {tgname}: id{id}, {username}",
                 "flush",
                 auth_part,
                 allow_part,
                 parent_http,  # 'parent' comes before 'proxy'
                 proxy,
-                f"# End http for {username} id{id}"
+                f"# End http for {tgname}: id{id}, {username}"
             ]
             socks_parts = [
-                f"# Start socks for {username} id{id}",
+                f"# Start socks for {tgname}: id{id}, {username}",
                 "flush",
                 auth_part,
                 allow_part,
                 parent_socks,  # 'parent' comes before 'socks'
                 socks,
-                f"# End socks for {username} id{id}"
+                f"# End socks for {tgname}: id{id}, {username}"
             ]
         elif mode == "modem":
             http_parts = [
-                f"# Start http for {username} id{id}",
+                f"# Start http for {tgname}: id{id}, {username}",
                 "flush",
                 auth_part,
                 allow_part,
                 proxy,  # No 'parent', so 'proxy' comes last before comment
-                f"# End http for {username} id{id}"
+                f"# End http for {tgname}: id{id}, {username}"
             ]
             socks_parts = [
-                f"# Start socks for {username} id{id}",
+                f"# Start socks for {tgname}: id{id}, {username}",
                 "flush",
                 auth_part,
                 allow_part,
                 socks,  # No 'parent', so 'socks' comes last before comment
-                f"# End socks for {username} id{id}"
+                f"# End socks for {tgname}: id{id}, {username}"
             ]
 
         # Join the parts together, adding a newline only at the end
@@ -244,7 +245,7 @@ def add_user_config(username, mode, http_port, socks_port, id, parent_ip=None):
         logging.error(f"An unexpected error occurred: {str(e)}")
         return False
 
-def remove_user_config(username, proxy_id):
+def remove_user_config(username, proxy_id, tgname):
     try:
         logging.info(f"Removing config: id{proxy_id}")
         lines = read_file(CONFIG_PATH)
@@ -254,10 +255,10 @@ def remove_user_config(username, proxy_id):
 
         user_removed = False
         new_config = []
-        start_http_tag = f"# Start http for {username} id{proxy_id}"
-        end_http_tag = f"# End http for {username} id{proxy_id}"
-        start_socks_tag = f"# Start socks for {username} id{proxy_id}"
-        end_socks_tag = f"# End socks for {username} id{proxy_id}"
+        start_http_tag = f"# Start http for {tgname}: id{proxy_id}, {username}"
+        end_http_tag = f"# End http for {tgname}: id{proxy_id}, {username}"
+        start_socks_tag = f"# Start socks for {tgname}: id{proxy_id}, {username}"
+        end_socks_tag = f"# End socks for {tgname}: id{proxy_id}, {username}"
 
         skip = False
         for line in lines:
@@ -287,7 +288,8 @@ def remove_user_config(username, proxy_id):
         logging.error(f"An error occurred while removing user {username} from config: {str(e)}")
         return False
 
-def update_user_in_config(old_username, new_username, proxy_id):
+def update_user_in_config(old_username, new_username, proxy_id, tgname):
+    logging.debug(f'DATA CONFIG: {old_username}, {new_username}, {proxy_id}, {tgname}')
     try:
         config = read_file(CONFIG_PATH)
         if config is None:
@@ -296,10 +298,10 @@ def update_user_in_config(old_username, new_username, proxy_id):
 
         config = "".join(config)
         config_updates = {
-            f"# Start http for {old_username} id{proxy_id}": f"# Start http for {new_username} id{proxy_id}",
-            f"# End http for {old_username} id{proxy_id}": f"# End http for {new_username} id{proxy_id}",
-            f"# Start socks for {old_username} id{proxy_id}": f"# Start socks for {new_username} id{proxy_id}",
-            f"# End socks for {old_username} id{proxy_id}": f"# End socks for {new_username} id{proxy_id}",
+            f"# Start http for {tgname}: id{proxy_id}, {old_username}": f"# Start http for {tgname}: id{proxy_id}, {new_username}",
+            f"# End http for {tgname}: id{proxy_id}, {old_username}": f"# End http for {tgname}: id{proxy_id}, {new_username}",
+            f"# Start socks for {tgname}: id{proxy_id}, {old_username}": f"# Start socks for {tgname}: id{proxy_id}, {new_username}",
+            f"# End socks for {tgname}: id{proxy_id}, {old_username}": f"# End socks for {tgname}: id{proxy_id}, {new_username}",
             f"allow {old_username}": f"allow {new_username}"
         }
 
@@ -356,25 +358,25 @@ def password_exists_in_ACL(password):
         logging.error(f"An error occurred while checking if user exists: {str(e)}")
         return False
 
-def user_count_in_ACL(username, proxy_id, config_lines):
+def user_count_in_ACL(username, proxy_id, tgname, config_lines):
     count = 0
-    search_pattern = f"# Start http for {username} id{proxy_id}"
+    search_pattern = f"# Start http for {tgname}: id{proxy_id}, {username}"
     for line in config_lines:
         if search_pattern in line:
             count += 1
     return count
 
-def update_auth_in_config(proxy_id, username, protocol, auth_type, allow_ip):
+def update_auth_in_config(proxy_id, username, protocol, auth_type, allow_ip, tgname):
     try:
         lines = read_file(CONFIG_PATH)
         if lines is None:
             logging.error("Failed to read config file")
             return False, "Failed to read config file"
 
-        start_tag = f"# Start {protocol} for {username} id{proxy_id}"
-        end_tag = f"# End {protocol} for {username} id{proxy_id}"
+        start_tag = f"# Start {protocol} for {tgname}: id{proxy_id}, {username}"
+        end_tag = f"# End {protocol} for {tgname}: id{id}, {username}"
 
-        search_pattern = f"# Start {protocol} for {username} id{proxy_id}"
+        search_pattern = f"# Start {protocol} for {tgname}: id{id}, {username}"
         logging.debug(search_pattern)
         modem_id_exists_in_config_result = modem_id_exists_in_config(search_pattern, proxy_id, username)
 
@@ -403,7 +405,7 @@ def update_auth_in_config(proxy_id, username, protocol, auth_type, allow_ip):
                     if auth_type == "strong":
                         line = f"allow {username}\n"
                     elif auth_type == "iponly":
-                        line = f"allow * {allow_ip}\n"
+                        line = f"allow * {allow_ip},{CHECKER_IP}\n"
         
             new_config.append(line)
 
@@ -448,13 +450,13 @@ def update_mode_in_config(new_mode, parent_ip, device_token, http_port, socks_po
             new_line = line.strip()
             logging.debug(f"NEWLINE: {new_line}")
 
-            if f"# Start http for {username} id{device_id}" in line.strip():
+            if f"# Start http for {tgname}: id{device_id}, {username}" in line.strip():
                 inside_user_block = True
-                logging.debug(f"Entering user block: {username}, id{device_id}")
+                logging.debug(f"Entering user block: {tgname}: id{device_id}, {username}")
 
-            if f"# End socks for {username} id{device_id}" in line.strip():
+            if f"# End socks for {tgname}: id{device_id}, {username}" in line.strip():
                 inside_user_block = False
-                logging.debug(f"Exiting user block: {username}, id{device_id}")
+                logging.debug(f"Exiting user block: {tgname}: id{device_id}, {username}")
 
             if inside_user_block:
                 logging.debug(f"Processing line within user block: {line.strip()}")
@@ -530,11 +532,11 @@ def replace_android_in_config(old_ip, new_ip, old_id, new_id, username):
         for line in lines:
             new_line = line
 
-            if f"# Start http for {username} id{old_id}" in line.strip():
+            if f"# Start http for {tgname}: id{old_id}, {username}" in line.strip():
                 inside_user_block = True
                 logging.debug(f"Entering user block: {inside_user_block}")
                 
-            elif f"# End socks for {username} id{old_id}" in line.strip():
+            elif f"# End socks for {tgname}: id{old_id}, {username}" in line.strip():
                 new_line = re.sub(r'(?<= id)\d+(?![\w\d])', str(new_id), new_line)
                 inside_user_block = False
                 logging.debug(f"Exiting user block: {inside_user_block}")
@@ -556,17 +558,17 @@ def replace_android_in_config(old_ip, new_ip, old_id, new_id, username):
         logging.error(f"An error occurred: {e}")
         return {"message": f"An error occurred: {e}", "status_code": 500}
 
-def modem_id_exists_in_config(search_pattern, proxy_id, username):
+def modem_id_exists_in_config(proxy_id, username, tgname):
     try:
         content = read_file(CONFIG_PATH)
         if content is None:
             logging.error("An error occurred while reading the config file.")
             return False
-        search_patterns = search_pattern
-        # search_patterns = [
-        #     f"# Start http for {username} id{proxy_id}",
-        #     f"# Start socks for {username} id{proxy_id}"
-        # ]
+        # search_patterns = search_pattern
+        search_patterns = [
+            f"# Start http for {tgname}: id{proxy_id}, {username}",
+            f"# Start socks for {tgname}: id{proxy_id}, {username}"
+        ]
 
         for search_pattern in search_patterns:
             if search_pattern in ''.join(content):
@@ -580,7 +582,7 @@ def modem_id_exists_in_config(search_pattern, proxy_id, username):
         logging.error(f"An error occurred while checking ID in config: {str(e)}")
         return False
 
-def replace_modem_in_config(old_id, new_id, username):
+def replace_modem_in_config(old_id, new_id, tgname, username):
     try:
         logging.info(f"Changing ID in config: old_id: {old_id}, new_id: {new_id}")
 
@@ -593,11 +595,11 @@ def replace_modem_in_config(old_id, new_id, username):
         for line in lines:
             new_line = line
 
-            if f"# Start http for {username} id{old_id}" in line.strip():
+            if f"# Start http for {tgname}: id{old_id}, {username}" in line.strip():
                 inside_user_block = True
                 logging.debug(f"Entering user block: {inside_user_block}")
                                 
-            elif f"# End socks for {username} id{old_id}" in line.strip():
+            elif f"# End socks for {tgname}: id{old_id}, {username}" in line.strip():
                 new_line = re.sub(r'(?<= id)\d+(?![\w\d])', str(new_id), new_line)
                 inside_user_block = False
                 logging.debug(f"Exiting user block: {inside_user_block}")          
