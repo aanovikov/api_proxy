@@ -297,22 +297,43 @@ def airplane_toggle_coordinates(serial, device_model):
         else:
             logging.info("Display is already ON, skipping the wake-up cycle.")
 
-        for _ in range(3): # open network settings and check what that window focused
-            logging.debug(f'Opening TetherSettings: serial: {serial}, type: {device_model}')
-            subprocess.run(open_settings_command, shell=True)
-            time.sleep(1)
-            start_time = time.time()
-            logging.debug(f'Checking if TetherSettings is focused: serial: {serial}, type: {device_model}')
-            while time.time() - start_time <= 5:
-                result = subprocess.run(active_window_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                if 'NetworkDashboardActivity' in result.stdout.decode():
-                    break
+        # for _ in range(3): # open network settings and check what that window focused
+        #     logging.debug(f'Opening TetherSettings: serial: {serial}, type: {device_model}')
+        #     subprocess.run(open_settings_command, shell=True)
+        #     time.sleep(2)
+        #     start_time = time.time()
+        #     logging.debug(f'Checking if TetherSettings is focused: serial: {serial}, type: {device_model}')
+        #     while time.time() - start_time <= 5:
+        #         result = subprocess.run(active_window_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        #         if 'NetworkDashboardActivity' in result.stdout.decode():
+        #             break
+        #     else:
+        #         continue
+        #     break
+        # else:
+        #     logging.error(f"NetworkDashboardActivity did not open after 3 attempts, serial: {serial}")
+        #     return False
+
+        try:
+            for _ in range(3):  # open network settings and check what that window focused
+                logging.debug(f'Opening TetherSettings: serial: {serial}, type: {device_model}')
+                subprocess.run(open_settings_command, shell=True)
+                time.sleep(2)
+                start_time = time.time()
+                logging.debug(f'Checking if TetherSettings is focused: serial: {serial}, type: {device_model}')
+                while time.time() - start_time <= 5:
+                    result = subprocess.run(active_window_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    if 'NetworkDashboardActivity' in result.stdout.decode():
+                        break
+                else:
+                    continue
+                break
             else:
-                continue
-            break
-        else:
-            logging.error(f"NetworkDashboardActivity did not open after 3 attempts, serial: {serial}")
-            return False
+                logging.error(f"NetworkDashboardActivity did not open after 3 attempts, serial: {serial}")
+                # вместо return False, просто продолжим выполнение
+        except Exception as e:
+            logging.error(f"Произошла ошибка при проверке NetworkDashboardActivity: {e}")
+            # Обработка исключения, программа продолжит выполнение дальше
 
         for _ in range(3): # tap on coordinates to switch airplane mode ON and check status
             logging.debug(f'Tapping on coordinates 1: serial: {serial}, type: {device_model}')
