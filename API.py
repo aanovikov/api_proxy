@@ -49,8 +49,9 @@ CONFIG_PATH = os.getenv('CONFIG_PATH')
 MODEM_UP_TIME = 1
 CHANGE_IP_TIMEOUT = 30
 ALLOWED_INTERVAL = 60
+SCHEDULER_RDB = os.getenv('SCHEDULER_RDB')
 
-redis_conn = sm.connect_to_redis(db=1)
+redis_conn = sm.connect_to_redis(db=SCHEDULER_RDB)
 scheduler = Scheduler(connection=redis_conn, interval=30)
 
 class Reboot(Resource):
