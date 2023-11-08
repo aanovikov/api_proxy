@@ -180,8 +180,8 @@ MODEM_HANDLERS = {
     'SM-A015F': {
         'modem_on': lambda sn: modem_toggle_cmd(sn, 'rndis'),
         'modem_off': lambda sn: modem_toggle_cmd(sn, 'none'),
-        'modem_status': lambda sn: modem_get_status(sn, 'A015F'),
-        'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'A015F')
+        'modem_status': lambda sn: modem_get_status(sn, 'SM-A015F'),
+        'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'SM-A015F')
     },
     'SM-A260G': {
         'modem_on': lambda sn: modem_toggle_coordinates(sn, 'SM-A260G'),
