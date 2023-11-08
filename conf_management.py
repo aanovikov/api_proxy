@@ -376,9 +376,10 @@ def update_auth_in_config(proxy_id, username, protocol, auth_type, allow_ip, tgn
         start_tag = f"# Start {protocol} for {tgname}: id{proxy_id}, {username}"
         end_tag = f"# End {protocol} for {tgname}: id{id}, {username}"
 
-        search_pattern = f"# Start {protocol} for {tgname}: id{id}, {username}"
-        logging.debug(search_pattern)
-        modem_id_exists_in_config_result = modem_id_exists_in_config(search_pattern, proxy_id, username)
+        # search_pattern = f"# Start {protocol} for {tgname}: id{id}, {username}"
+        # logging.debug(f'SEARCH PATTERN: {search_pattern}')
+        # modem_id_exists_in_config_result = modem_id_exists_in_config(search_pattern, proxy_id, username)
+        modem_id_exists_in_config_result = modem_id_exists_in_config(proxy_id, username, tgname)
 
         if not modem_id_exists_in_config_result:
             logging.error(f"No {username} or id{proxy_id} found in the config.")
