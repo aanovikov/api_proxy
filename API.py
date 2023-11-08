@@ -53,6 +53,7 @@ SCHEDULER_RDB = os.getenv('SCHEDULER_RDB')
 
 redis_conn = sm.connect_to_redis(db=SCHEDULER_RDB)
 scheduler = Scheduler(connection=redis_conn, interval=30)
+logger.debug(redis_conn)
 
 class Reboot(Resource):
     #@ts.requires_role("user")
