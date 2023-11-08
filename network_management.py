@@ -149,6 +149,10 @@ def modem_get_status(serial, device_model):
     # Изменяем команду в зависимости от типа устройства
     if device_model in ('SM-A015F', 'J20', '5033D_RU', 'SM-J400F'):
         base_command += "s"
+        logging.debug(f'BASE COMMAND + S: {base_command}')
+    
+    logging.debug(f'BASE COMMAND: {base_command}')
+    logging.debug(f'DEVCIE: {device_model}')
 
     process = Popen(base_command.split(), stdout=PIPE, stderr=PIPE)
 
