@@ -13,10 +13,12 @@ AIRPLANE_ON_CMD = "su -c 'settings put global airplane_mode_on 1; am broadcast -
 AIRPLANE_OFF_CMD = "su -c 'settings put global airplane_mode_on 0; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false'"
 WIFI_STATUS_CMD = "adb -s {} shell dumpsys wifi | grep 'mNetworkInfo'"
 WAKEUP_DISPLAY = "adb -s {} shell input keyevent 26"
+BACK = "adb -s {} shell input keyevent 4"
 DISPLAY_STATUS = "adb -s {} shell dumpsys power | grep 'Display Power'"
 AIRPLANE_MODE_WINDOW = "adb -s {} shell am start -a android.settings.AIRPLANE_MODE_SETTINGS"
 TETHER_SETTINGS = "adb -s {} shell am start -n com.android.settings/.TetherSettings"
 ACTIVE_WINDOW = "adb -s {} shell dumpsys window windows | grep -E 'mCurrentFocus'"
+ACTIVE_WINDOW_ANDROID_10 = "'adb -s {} shell dumpsys window displays | grep -E 'mCurrentFocus'"
 AIRPLANE_STATUS = "adb -s {} shell settings get global airplane_mode_on"
 SCREEN_INPUT = "adb -s {} shell input tap {} {}"
 RNDIS_STATUS="adb -s {} shell ip a | grep -E 'usb|rndis'"
@@ -28,7 +30,7 @@ def dispatcher(device_model, serial, action):
     else:
         raise ValueError(f"No handler found for device {device} and action {action}")
 
-def modem_toggle_coordinates(serial, device_model): # a2 and ais need to tap on the toggler
+def modem_toggle_coordinates_ON(serial, device_model):
     try:
         if TETHERING_COORDINATES is None:
             logging.error(f"TETHERING_COORDINATES is not defined, serial: {serial}, type: {device_model}")
@@ -45,80 +47,194 @@ def modem_toggle_coordinates(serial, device_model): # a2 and ais need to tap on 
         x, y = coordinates
 
         wakeup_command = WAKEUP_DISPLAY.format(serial)
+        go_back = BACK.format(serial)
         status_display = DISPLAY_STATUS.format(serial)
         open_settings_command = TETHER_SETTINGS.format(serial)
-        active_window_command = ACTIVE_WINDOW.format(serial)
         screen_input_command = SCREEN_INPUT.format(serial, x, y)
         rndis_status = RNDIS_STATUS.format(serial)
         
         logging.info(f'MODEM switching is started: {serial}, type: {device_model}')
 
-        for _ in range(3): # Wake up display and check its status
-            logging.debug(f'Waking display UP: serial: {serial}, type: {device_model}')
-            subprocess.run(wakeup_command, shell=True)  # Wake up the device
-            time.sleep(1)
-            start_time = time.time()
-            # Check display status within a 5-second time limit
-            logging.debug(f'Checking display STATE: serial: {serial}, type: {device_model}')
-            while time.time() - start_time <= 5:
+        # Check modem status before next actions
+        logging.debug(f'Checking RNDIS status 1: serial: {serial}, type: {device_model}')
+        result = subprocess.run(rndis_status, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        output = result.stdout.decode()
+        logging.debug(f'RESULT: {output}')
+
+        # If the output is empty, we assume the interface is DOWN.
+        match = None
+        if output == "":
+            logging.info(f"Modem interface output is empty, RNDIS is DOWN, attempting to switch ON")
+            interface_down = True
+        else:
+            match = re.search(r'(rndis0|usb0):.*state (DOWN)', output)
+            interface_down = bool(match)
+
+        if interface_down:
+            # If modem DOWN - switch ON tethering
+            if match:
+                interface, state = match.groups()
+                logging.info(f"{interface} is DOWN")
+
+            # Wake up display and check its status
+            for attempt in range(3):  # Try up to 3 times
+                logging.debug(f'Waking display UP: serial: {serial}, type: {device_model}')
+                subprocess.run(wakeup_command, shell=True)  # Wake up the device
+                time.sleep(1)
+
                 result = subprocess.run(status_display, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 if 'state=ON' in result.stdout.decode():
-                    logging.debug(f'STATE is ON')
+                    logging.debug(f'Display state is ON, proceeding')
                     break
-            else:
-                continue  # Restart the loop to try again
-            break  # Exit the loop if we successfully activated the display
-        else:
-            logging.error(f"Display did not turn on after 3 attempts, serial: {serial}")
-            return False
+                if attempt == 2:  # Last attempt
+                    logging.error(f"Display did not turn on after 3 attempts, serial: {serial}")
+                    return False
 
-        for _ in range(3):  # open tethering settings and check what that window focused
-            logging.debug(f'Opening TetherSettings: serial: {serial}, type: {device_model}')
+            # Open tethering settings
+            logging.debug(f'Opening tethering settings: serial: {serial}, type: {device_model}')
             subprocess.run(open_settings_command, shell=True)
-            time.sleep(1)
-            start_time = time.time()
-            logging.debug(f'Checking if TetherSettings is focused: serial: {serial}, type: {device_model}')
-            while time.time() - start_time <= 5:
-                result = subprocess.run(active_window_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                if 'TetherSettings' in result.stdout.decode():
-                    logging.debug(f'TetherSettings is OPENED')
-                    break
-            else:
-                continue
-            break
-        else:
-            logging.error(f"TetherSettings did not open after 3 attempts, serial: {serial}")
-            return False
-
-        for _ in range(3):  # tap on coordinates to switch tether mode ON and check status
-            logging.debug(f'Tapping on coordinates: serial: {serial}, type: {device_model}')
+            time.sleep(2)  # Give the UI time to open
+            
+            # tap to turn on tethering
+            logging.debug(f'Tap to UP tethering: serial: {serial}, type: {device_model}')
             subprocess.run(screen_input_command, shell=True)
-            time.sleep(4)  # Wait a bit longer to give the system time to adjust
-            start_time = time.time()
-            logging.debug(f'Checking RNDIS status: serial: {serial}, type: {device_model}')
-            while time.time() - start_time <= 5:
-                result = subprocess.run(rndis_status, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                output = result.stdout.decode()
-                match = re.search(r'(rndis0|usb0):.*state (UP|DOWN)', output)
+            time.sleep(4)
+
+            # Check RNDIS status after tapping
+            logging.debug(f'Checking RNDIS status after tapping: serial: {serial}, type: {device_model}')
+            result = subprocess.run(rndis_status, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            output = result.stdout.decode()
+            logging.debug(f'RNDIS status RESULT: {output}')
+
+            # If the output is empty, we still assume the interface is DOWN.
+            if output == "":
+                logging.error(f"Modem interface output is empty after tapping, assuming RNDIS failed to switch ON")
+                logging.debug(f'GO HOME: {serial}, type: {device_model}')
+                subprocess.run(go_back, shell=True)
+                return False
+            else:
+                match = re.search(r'(rndis0|usb0):.*state (UP)', output)
                 if match:
                     interface, state = match.groups()
-                    if state == "UP":
-                        logging.info(f"{interface} is UP")
-                        return "UP"
-                    else:
-                        logging.info(f"{interface} is DOWN")
-                        return "DOWN"
-            else:
-                continue
-            break
+                    logging.info(f"{interface} is now UP after tapping")
+                    logging.debug(f'GO HOME: {serial}, type: {device_model}')
+                    subprocess.run(go_back, shell=True)
+                else:
+                    logging.error(f"Failed to enable RNDIS interface, status is not UP after tapping")
+                    return False
+
         else:
-            logging.error(f"RNDIS mode did not activate after 3 attempts, serial: {serial}")
-            return False
+            logging.info(f"Modem interface is already UP or output is not as expected, no action needed")
+            logging.debug(f'GO HOME: {serial}, type: {device_model}')
+            subprocess.run(go_back, shell=True)
 
     except subprocess.CalledProcessError as e:
         logging.error(f"Command failed with error: {e}, serial: {serial}, type: {device_model}")
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}, serial: {serial}, type: {device_model}")
+
+def modem_toggle_coordinates_OFF(serial, device_model):
+    try:
+        if TETHERING_COORDINATES is None:
+            logging.error(f"TETHERING_COORDINATES is not defined, serial: {serial}, type: {device_model}")
+            return False
+
+        if device_model not in TETHERING_COORDINATES:
+            logging.error(f"Invalid device: serial: {serial}, type: {device_model}")
+            return False
+
+        coordinates = TETHERING_COORDINATES.get(device_model)
+        if coordinates is None:
+            logging.error(f"No coordinates found for serial: {serial}")
+            return False
+        x, y = coordinates
+
+        wakeup_command = WAKEUP_DISPLAY.format(serial)
+        go_back = BACK.format(serial)
+        status_display = DISPLAY_STATUS.format(serial)
+        open_settings_command = TETHER_SETTINGS.format(serial)
+        screen_input_command = SCREEN_INPUT.format(serial, x, y)
+        rndis_status = RNDIS_STATUS.format(serial)
+        
+        logging.info(f'MODEM switching off started: serial: {serial}, type: {device_model}')
+
+        # Check RNDIS status before next actions
+        logging.debug(f'Checking RNDIS status before toggling off: serial: {serial}, type: {device_model}')
+        result = subprocess.run(rndis_status, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        output = result.stdout.decode()
+        logging.debug(f'RESULT: {output}')
+
+        # If the output is empty, we assume the interface is DOWN (which is an error if we want to switch off).
+        match = None
+        if output == "":
+            logging.error(f"Modem interface output is empty, assuming RNDIS is already DOWN")
+            logging.debug(f'GO HOME: {serial}, type: {device_model}')
+            subprocess.run(go_back, shell=True)
+            return False
+        else:
+            match = re.search(r'(rndis0|usb0):.*state (UP)', output)
+        if match:
+            interface, state = match.groups()
+            logging.info(f"{interface} is UP, attempting to switch OFF")
+
+            # The rest of the function mirrors the ON functionality but designed to switch OFF the interface
+            # Wake up display, open settings, tap coordinates, check status...
+
+            # Wake up display and check its status
+            for attempt in range(3):  # Try up to 3 times
+                logging.debug(f'Waking up display: serial: {serial}, type: {device_model}')
+                subprocess.run(wakeup_command, shell=True)  # Wake up the device
+                time.sleep(1)
+
+                result = subprocess.run(status_display, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                if 'state=ON' in result.stdout.decode():
+                    logging.debug(f'Display state is ON, proceeding')
+                    break
+                if attempt == 2:  # Last attempt
+                    logging.error(f"Display did not turn on after 3 attempts, serial: {serial}")
+                    return False
+
+            # Open tethering settings
+            logging.debug(f'Opening tethering settings: serial: {serial}, type: {device_model}')
+            subprocess.run(open_settings_command, shell=True)
+            time.sleep(2)  # Give the UI time to open
+            
+            # Tap to switch off tethering
+            logging.debug(f'Tapping to switch OFF tethering: serial: {serial}, type: {device_model}')
+            subprocess.run(screen_input_command, shell=True)
+            time.sleep(4)
+
+            # Check RNDIS status after tapping
+            logging.debug(f'Checking RNDIS status after tapping: serial: {serial}, type: {device_model}')
+            result = subprocess.run(rndis_status, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            output = result.stdout.decode()
+            logging.debug(f'RNDIS status RESULT: {output}')
+
+            if output == "":
+                logging.info(f"Modem interface output is empty after tapping, assuming RNDIS is now DOWN")
+            else:
+                match = re.search(r'(rndis0|usb0):.*state (DOWN)', output)
+                if match:
+                    interface, state = match.groups()
+                    logging.info(f"{interface} is now DOWN after tapping")
+                else:
+                    logging.error(f"Failed to switch OFF RNDIS interface, status is not DOWN after tapping")
+                    return False
+
+            logging.debug(f'GO HOME: {serial}, type: {device_model}')
+            subprocess.run(go_back, shell=True)
+        else:
+            logging.info(f"Modem interface is already DOWN or output is not as expected, no action needed")
+            logging.debug(f'GO HOME: {serial}, type: {device_model}')
+            subprocess.run(go_back, shell=True)
+            return True
+
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Command failed with error: {e}, serial: {serial}, type: {device_model}")
+        return False
+    except Exception as e:
+        logging.error(f"An unexpected error occurred: {e}, serial: {serial}, type: {device_model}")
+        return False
 
 def modem_toggle_cmd(serial, mode):
     try:
@@ -147,12 +263,12 @@ def modem_get_status(serial, device_model):
     base_command = f"adb -s {serial} shell svc usb getFunction"
 
     # Изменяем команду в зависимости от типа устройства
-    if device_model in ('SM-A015F', 'J20', '5033D_RU', 'SM-J400F'):
+    if device_model in ('SM-A015F', 'J20', '5033D_RU', 'SM-J400F', 'Pixel 2'):
         base_command += "s"
         logging.debug(f'BASE COMMAND + S: {base_command}')
     
     logging.debug(f'BASE COMMAND: {base_command}')
-    logging.debug(f'DEVCIE: {device_model}')
+    logging.debug(f'DEVICE: {device_model}')
 
     process = Popen(base_command.split(), stdout=PIPE, stderr=PIPE)
 
@@ -184,8 +300,8 @@ MODEM_HANDLERS = {
         'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'SM-A015F')
     },
     'SM-A260G': {
-        'modem_on': lambda sn: modem_toggle_coordinates(sn, 'SM-A260G'),
-        'modem_off': lambda sn: modem_toggle_coordinates(sn, 'SM-A260G'),
+        'modem_on': lambda sn: modem_toggle_coordinates_ON(sn, 'SM-A260G'),
+        'modem_off': lambda sn: modem_toggle_coordinates_OFF(sn, 'SM-A260G'),
         'modem_status': lambda sn: modem_get_status(sn, 'SM-A260G'),
         'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'SM-A260G')
     },
@@ -196,8 +312,8 @@ MODEM_HANDLERS = {
         'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, '5033D_RU')
     },
     'Kingcomm C500': {
-        'modem_on': lambda sn: modem_toggle_coordinates(sn, 'Kingcomm C500'),
-        'modem_off': lambda sn: modem_toggle_coordinates(sn, 'Kingcomm C500'),
+        'modem_on': lambda sn: modem_toggle_coordinates_ON(sn, 'Kingcomm C500'),
+        'modem_off': lambda sn: modem_toggle_coordinates_OFF(sn, 'Kingcomm C500'),
         'modem_status': lambda sn: modem_get_status(sn, 'Kingcomm C500'),
         'toggle_airplane': lambda sn: airplane_toggle_coordinates(sn, 'Kingcomm C500')
     },
@@ -208,16 +324,22 @@ MODEM_HANDLERS = {
         'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'J20')
     },
     'Alpha 5G': {
-        'modem_on': lambda sn: modem_toggle_coordinates(sn, 'Alpha 5G'),
-        'modem_off': lambda sn: modem_toggle_coordinates(sn, 'Alpha 5G'),
+        'modem_on': lambda sn: modem_toggle_coordinates_ON(sn, 'Alpha 5G'),
+        'modem_off': lambda sn: modem_toggle_coordinates_OFF(sn, 'Alpha 5G'),
         'modem_status': lambda sn: modem_get_status(sn, 'Alpha 5G'),
         'toggle_airplane': lambda sn: airplane_toggle_coordinates(sn, 'Alpha 5G')
     },
     'SM-J400F': {
-        'modem_on': lambda sn: modem_toggle_coordinates(sn, 'SM-J400F'),
-        'modem_off': lambda sn: modem_toggle_coordinates(sn, 'SM-J400F'),
+        'modem_on': lambda sn: modem_toggle_coordinates_ON(sn, 'SM-J400F'),
+        'modem_off': lambda sn: modem_toggle_coordinates_OFF(sn, 'SM-J400F'),
         'modem_status': lambda sn: modem_get_status(sn, 'SM-J400F'),
         'toggle_airplane': lambda sn: airplane_toggle_coordinates(sn, 'SM-J400F')
+    },
+    'Pixel 2': {
+        'modem_on': lambda sn: modem_toggle_coordinates_ON(sn, 'Pixel 2'),
+        'modem_off': lambda sn: modem_toggle_coordinates_OFF(sn, 'Pixel 2'),
+        'modem_status': lambda sn: modem_get_status(sn, 'Pixel 2'),
+        'toggle_airplane': lambda sn: airplane_toggle_coordinates(sn, 'Pixel 2')
     }
 }
 
@@ -269,6 +391,7 @@ def airplane_toggle_coordinates(serial, device_model):
         x, y = coordinates
 
         wakeup_command = WAKEUP_DISPLAY.format(serial)
+        go_back = BACK.format(serial)
         status_display = DISPLAY_STATUS.format(serial)
         open_settings_command = AIRPLANE_MODE_WINDOW.format(serial)
         active_window_command = ACTIVE_WINDOW.format(serial)
@@ -288,7 +411,7 @@ def airplane_toggle_coordinates(serial, device_model):
                 start_time = time.time()
                 # Check display status within a 5-second time limit
                 logging.debug(f'Checking display STATE: serial: {serial}, type: {device_model}')
-                while time.time() - start_time <= 5:
+                while time.time() - start_time <= 3:
                     result = subprocess.run(status_display, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                     if 'state=ON' in result.stdout.decode():
                         break
@@ -301,59 +424,29 @@ def airplane_toggle_coordinates(serial, device_model):
         else:
             logging.info("Display is already ON, skipping the wake-up cycle.")
 
-        # for _ in range(3): # open network settings and check what that window focused
-        #     logging.debug(f'Opening TetherSettings: serial: {serial}, type: {device_model}')
-        #     subprocess.run(open_settings_command, shell=True)
-        #     time.sleep(2)
-        #     start_time = time.time()
-        #     logging.debug(f'Checking if TetherSettings is focused: serial: {serial}, type: {device_model}')
-        #     while time.time() - start_time <= 5:
-        #         result = subprocess.run(active_window_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        #         if 'NetworkDashboardActivity' in result.stdout.decode():
-        #             break
-        #     else:
-        #         continue
-        #     break
-        # else:
-        #     logging.error(f"NetworkDashboardActivity did not open after 3 attempts, serial: {serial}")
-        #     return False
+        logging.debug(f'Opening Airplane settings: serial: {serial}, type: {device_model}')
+        subprocess.run(open_settings_command, shell=True)
+        logging.debug(f'Opened Airplane settings and wait 2 sec: {serial}, type: {device_model}')
+        time.sleep(2)
 
-        try:
-            for _ in range(3):  # open network settings and check what that window focused
-                logging.debug(f'Opening TetherSettings: serial: {serial}, type: {device_model}')
-                subprocess.run(open_settings_command, shell=True)
-                time.sleep(2)
-                start_time = time.time()
-                logging.debug(f'Checking if TetherSettings is focused: serial: {serial}, type: {device_model}')
-                while time.time() - start_time <= 5:
-                    result = subprocess.run(active_window_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    if 'NetworkDashboardActivity' in result.stdout.decode():
-                        break
-                else:
-                    continue
-                break
-            else:
-                logging.error(f"NetworkDashboardActivity did not open after 3 attempts, serial: {serial}")
-                # вместо return False, просто продолжим выполнение
-        except Exception as e:
-            logging.error(f"Произошла ошибка при проверке NetworkDashboardActivity: {e}")
-            # Обработка исключения, программа продолжит выполнение дальше
-
-        for _ in range(3): # tap on coordinates to switch airplane mode ON and check status
+        for _ in range(3):  # tap on coordinates to switch airplane mode ON and check status
             logging.debug(f'Tapping on coordinates 1: serial: {serial}, type: {device_model}')
             subprocess.run(screen_input_command, shell=True)
             time.sleep(1)
             start_time = time.time()
             logging.debug(f'Checking AIRPLANE status: serial: {serial}, type: {device_model}')
-            while time.time() - start_time <= 5:
+            while time.time() - start_time <= 3:
                 result = subprocess.run(status_airplane, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 if '1' in result.stdout.decode():
                     logging.info(f"AIRPLANE ON")
                     break
             else:
-                continue
+                # Если режим самолета не включился, то переходим к следующей итерации цикла for
+                continue  # Это continue здесь действительно необходимо, чтобы продолжить следующую итерацию цикла for
+            # Если режим самолета включился, прерываем цикл for
             break
         else:
+            # Этот блок else относится к циклу for и выполнится только если цикл for не был прерван
             logging.error(f"Airplane mode did not activate after 3 attempts, serial: {serial}")
             return False
         
@@ -364,7 +457,7 @@ def airplane_toggle_coordinates(serial, device_model):
             subprocess.run(screen_input_command, shell=True)
             time.sleep(1)
             start_time = time.time()
-            while time.time() - start_time <= 5:
+            while time.time() - start_time <= 3:
                 result = subprocess.run(status_airplane, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 if '0' in result.stdout.decode():
                     logging.info(f"AIRPLANE OFF")
@@ -375,7 +468,8 @@ def airplane_toggle_coordinates(serial, device_model):
         else:
             logging.error(f"Airplane mode did not DE-activate after 3 attempts, serial: {serial}")
             return False
-
+        logging.debug(f'GO HOME: {serial}, type: {device_model}')
+        subprocess.run(go_back, shell=True)
         return True
         
     except subprocess.CalledProcessError as e:
