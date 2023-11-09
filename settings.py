@@ -11,7 +11,7 @@ ALLOWED_PROTOCOLS = ['http', 'socks', 'both']
 AIRPLANE_MODE_SETTINGS = {
     'Kingcomm C500': (420, 790),
     'Alpha 5G': (637, 502),
-    'SM-J400F': (634, 612),
+    'SM-J400F': (640, 220),
     'Pixel 2': (940, 860)
 }
 
