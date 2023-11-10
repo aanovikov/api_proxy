@@ -661,7 +661,7 @@ class AddUserAndroid(Resource):
 
             logging.info(f"Received data: {data}")
 
-            required_fields = ['username', 'password', 'http_port', 'socks_port', 'serial', 'device', 'id', 'parent_ip']
+            required_fields = ['username', 'password', 'http_port', 'socks_port', 'serial', 'device', 'id', 'parent_ip', 'tgname']
 
             data, error_message, error_code = ts.validate_and_extract_data(required_fields)
 
@@ -717,7 +717,7 @@ class AddUserAndroid(Resource):
             logging.info(f"Generated token: {token}")
 
             acl_result = cm.add_user_to_acl(user_data['username'], user_data['password'])
-            config_result = cm.add_user_config(user_data['username'], user_data['mode'], user_data['http_port'], user_data['socks_port'], user_data['id'], user_data['parent_ip'])
+            config_result = cm.add_user_config(user_data['username'], user_data['mode'], user_data['http_port'], user_data['socks_port'], user_data['id'], user_data['parent_ip'], user_data['tgname'])
 
             if not acl_result:
                 logging.error(f"Failed to add user to ACL. Aborting operation.: {user_data['username']}")
