@@ -366,6 +366,7 @@ class DeleteUser(Resource):
                 elif status == "timeout":
                     logging.error(f"Device timed out, possibly it has lost connection: id{device_id}, serial: {serial}")
                 elif status == "rndis":
+                    logging.debug(f'Device in RNDIS')
                     MODEM_HANDLERS[device]['modem_off'](serial)
                     logging.info(f"RNDIS OFF: id{device_id}, serial: {serial}")
                 else:
@@ -672,21 +673,21 @@ class AddUserAndroid(Resource):
             user_data['mode'] = 'android'
             
             #validating data
-            fields_to_validate = {
-                'username': ts.is_valid_logopass,
-                'password': ts.is_valid_logopass,
-                'serial': ts.is_valid_serial,
-                'device': ts.is_valid_device,
-                'http_port': ts.is_valid_port,
-                'socks_port': ts.is_valid_port,
-                'id': ts.is_valid_id,
-                'parent_ip': ts.is_valid_ip
-            }
+            # fields_to_validate = {
+            #     'username': ts.is_valid_logopass,
+            #     'password': ts.is_valid_logopass,
+            #     'serial': ts.is_valid_serial,
+            #     'device': ts.is_valid_device,
+            #     'http_port': ts.is_valid_port,
+            #     'socks_port': ts.is_valid_port,
+            #     'id': ts.is_valid_id,
+            #     'parent_ip': ts.is_valid_ip
+            # }
 
-            for field, validation_func in fields_to_validate.items():
-                error_message, error_code = ts.validate_field(field, user_data[field], validation_func)
-                if error_message:
-                    return error_message, error_code
+            # for field, validation_func in fields_to_validate.items():
+            #     error_message, error_code = ts.validate_field(field, user_data[field], validation_func)
+            #     if error_message:
+            #         return error_message, error_code
 
             if sm.serial_exists(user_data['serial']):
                 logging.warning(f"Serial already exists: {user_data['serial']}")
