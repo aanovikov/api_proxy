@@ -732,7 +732,7 @@ class AddUserAndroid(Resource):
             else:
                 logging.info(f"Added user config: {user_data['username']}.")
 
-            data_to_redis = ['serial', 'device', 'mode', 'id', 'username', 'parent_ip']
+            data_to_redis = ['serial', 'device', 'mode', 'id', 'username', 'parent_ip', 'tgname']
             data_to_redis_storage = {field: user_data[field] for field in data_to_redis}
             redis_result = sm.store_to_redis(data_to_redis_storage, token)
 
@@ -752,8 +752,8 @@ class AddUserAndroid(Resource):
             return {"message": "Invalid JSON format received"}, 400
 
         except Exception as e:
-            logging.error(f"An error occurred: {str(e)}")
-            return {"message": f"Internal server error: {str(e)}"}, 500
+            logging.error(f"An error occurred: TOKEN: {token} ERROR: {str(e)}")
+            return {f"Internal server error: {token}, {str(e)}"}, 500
 
 class UpdateUser(Resource):
     @ts.requires_role("admin")
@@ -840,7 +840,7 @@ class ReplaceAndroid(Resource):
             required_fields = ['token', 'new_id', 'new_serial', 'new_device', 'new_parent_ip']
             
             data, error_message, error_code = ts.validate_and_extract_data(required_fields)
-
+        
             if error_message:
                 logging.warning(f"Validation failed: {error_message}")
                 return error_message, error_code
@@ -850,6 +850,8 @@ class ReplaceAndroid(Resource):
             new_serial = data.get('new_serial')
             new_device = data.get('new_device')
             new_parent_ip = data.get('new_parent_ip')
+
+            logging.debug(f'DATA JSON: token {token}, new_id {new_id}, new_serial {new_serial}, new_device {new_device}, new_parent_ip {new_parent_ip}')
 
             redis_data = sm.get_data_from_redis(token)
             if not redis_data:
@@ -861,14 +863,18 @@ class ReplaceAndroid(Resource):
             old_serial = redis_data.get('serial', '')
             old_device = redis_data.get('device', '')
             old_parent_ip = redis_data.get('parent_ip', '')
+            tgname = redis_data.get('tgname')
             
-            if not cm.android_ip_exists_in_config(old_parent_ip):
-                logging.error(f"IP is NOT found: {old_parent_ip}")
-                return {"message": f"IP is NOT found: {old_parent_ip}"}, 404
+            logging.debug(f'DATA REDIS: username: {username}, id: {old_id}, serial: {old_serial}, device: {old_device}, parent_ip: {old_parent_ip}, tgname: {tgname}')
 
-            if not cm.replace_android_in_config(old_parent_ip, new_parent_ip, old_id, new_id, username):
-                logging.error(f"IP is NOT replaced: {old_parent_ip}")
-                return {"message": f"IP is NOT replaced: {old_parent_ip}"}, 404
+            # if not cm.android_ip_exists_in_config(old_parent_ip):
+            #     logging.error(f"IP is NOT found: {old_parent_ip}")
+            #     return {"message": f"IP is NOT found: {old_parent_ip}"}, 404
+
+            if not cm.replace_android_in_config(old_parent_ip, new_parent_ip, old_id, new_id, username, tgname):
+                logging.error(f"IP is NOT replaced: TOKEN {token}, TGNAME {tgname}, OLD IP {old_parent_ip}")
+                return {"message": f"IP is NOT replaced: TOKEN {token}, TGNAME {tgname}, OLD IP {old_parent_ip}"}, 404
+
             logging.info(f"IP in CONFIG is replaced: {old_parent_ip} --> {new_parent_ip}")
 
             pipe.hset(token, 'parent_ip', new_parent_ip)
@@ -880,12 +886,12 @@ class ReplaceAndroid(Resource):
                 logging.error("Failed to execute Redis pipeline. Aborting operation.")
                 return {"message": "Internal server error"}, 500
 
-            logging.info(f"Android replaced: {old_parent_ip} --> {new_parent_ip}, id{old_id} --> id{new_id}, {old_serial} --> {new_serial}, {old_device} --> {new_device}")
-            return {"message": f"Android replaced: id{old_id} --> id{new_id}"}, 200
+            logging.info(f"Android replaced: {tgname}, {old_parent_ip} --> {new_parent_ip}, id{old_id} --> id{new_id}, {old_serial} --> {new_serial}, {old_device} --> {new_device}")
+            return {"message": f"Android replaced: tgname: {tgname}, id{old_id} --> id{new_id}"}, 200
 
         except Exception as e:
             logging.error(f"An error occurred: {str(e)}")
-            return {"message": "Internal server error"}, 500
+            return {"message": f"No data for token: {token}", "status_code": 404}
 
 class ReplaceModem(Resource):
     @ts.requires_role("admin")

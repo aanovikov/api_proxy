@@ -167,7 +167,7 @@ def write_config_to_file(config):
         logging.error(f"Failed to write config to file: {str(e)}")
         return False
 
-def add_user_config(username, mode, http_port, socks_port, id, tgname, parent_ip=None):
+def add_user_config(username, mode, http_port, socks_port, id, parent_ip, tgname):
     try:
         logging.debug(f"ADDING CONFIG: id{id}.")
         ifname = id  # Interface name
@@ -520,7 +520,7 @@ def android_ip_exists_in_config(old_ip):
         logging.error(f"An error occurred while checking IP in config: {str(e)}")
         return False
 
-def replace_android_in_config(old_ip, new_ip, old_id, new_id, username):
+def replace_android_in_config(old_ip, new_ip, old_id, new_id, username, tgname):
     try:
         logging.info(f"Changing ID and IP in config: old_ip: {old_ip}, new_ip: {new_ip}, old_id: {old_id}, new_id: {new_id}")
         
@@ -531,6 +531,7 @@ def replace_android_in_config(old_ip, new_ip, old_id, new_id, username):
             lines = f.readlines()
         
         for line in lines:
+            logging.debug(f'LINE: {line}')
             new_line = line
 
             if f"# Start http for {tgname}: id{old_id}, {username}" in line.strip():
