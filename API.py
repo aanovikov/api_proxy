@@ -551,6 +551,7 @@ class AddUserModem(Resource):
 
             user_data = {field: data[field] for field in required_fields}
             user_data['mode'] = 'modem'
+            parent_ip = 'none'
 
             #validating data
             # fields_to_validate = {
@@ -593,7 +594,7 @@ class AddUserModem(Resource):
 
             else:
                 handler = MODEM_HANDLERS.get(user_data['device'], {}).get('modem_on')
-                logging.debug(f'HANDLER 1: {handler}')
+                logging.debug(f'HANDLER 1: {handler}, maybe wrong device model')
                 handler(user_data['serial'])
                 interface_name = f"id{user_data['id']}"
                 ip_address = wait_for_ip(interface_name)
@@ -717,7 +718,7 @@ class AddUserAndroid(Resource):
             logging.info(f"Generated token: {token}")
 
             acl_result = cm.add_user_to_acl(user_data['username'], user_data['password'])
-            config_result = cm.add_user_config(user_data['username'], user_data['mode'], user_data['http_port'], user_data['socks_port'], user_data['id'], user_data['parent_ip'], user_data['tgname'])
+            config_result = cm.add_user_config(user_data['username'], user_data['mode'], user_data['http_port'], user_data['socks_port'], user_data['id'], user_data['tgname'], user_data['parent_ip'])
 
             if not acl_result:
                 logging.error(f"Failed to add user to ACL. Aborting operation.: {user_data['username']}")

@@ -167,7 +167,7 @@ def write_config_to_file(config):
         logging.error(f"Failed to write config to file: {str(e)}")
         return False
 
-def add_user_config(username, mode, http_port, socks_port, id, parent_ip, tgname):
+def add_user_config(username, mode, http_port, socks_port, id, tgname, parent_ip=None):
     try:
         logging.debug(f"ADDING CONFIG: id{id}.")
         ifname = id  # Interface name
