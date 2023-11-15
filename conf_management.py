@@ -377,7 +377,7 @@ def update_auth_in_config(proxy_id, username, protocol, auth_type, allow_ip, tgn
             return False, "Failed to read config file"
 
         start_tag = f"# Start {protocol} for {tgname}: id{proxy_id}, {username}"
-        end_tag = f"# End {protocol} for {tgname}: id{id}, {username}"
+        end_tag = f"# End {protocol} for {tgname}: id{proxy_id}, {username}"
 
         # search_pattern = f"# Start {protocol} for {tgname}: id{id}, {username}"
         # logger.debug(f'SEARCH PATTERN: {search_pattern}')
