@@ -16,6 +16,7 @@ import conf_management as cm
 from rq_scheduler.scheduler import Scheduler, Queue
 import json
 from datetime import datetime, timedelta
+from redis.exceptions import ResponseError, ConnectionError, TimeoutError, RedisError
 
 load_dotenv()
 
@@ -49,11 +50,35 @@ CONFIG_PATH = os.getenv('CONFIG_PATH')
 MODEM_UP_TIME = 1
 CHANGE_IP_TIMEOUT = 30
 ALLOWED_INTERVAL = 60
+REBOOT_RDB = 2
+EXPIRY_TIME = 60
 SCHEDULER_RDB = os.getenv('SCHEDULER_RDB')
 
 redis_conn = sm.connect_to_redis(db=SCHEDULER_RDB)
 scheduler = Scheduler(connection=redis_conn, interval=30)
 logger.debug(redis_conn)
+
+def reboot_info_to_redis(tgname, id, serial, expire=EXPIRY_TIME, db=REBOOT_RDB):
+    try:
+        r = sm.connect_to_redis(db)
+        if r is None:
+            logging.error("Failed to connect to Redis. Aborting operation.")
+            return False
+
+        r.setex(serial, expire, '')
+
+        logging.info(f"Stored reboot info: user {tgname}, id{id}, {serial}")
+        return True
+        
+    except redis.ConnectionError:
+        logging.error("Could not connect to Redis reboot DB")
+        return False
+    except redis.TimeoutError:
+        logging.error("Redis operation timed out")
+        return False
+    except Exception as e:
+        logging.error(f"An unknown error occurred while communicating with Redis: {e}")
+        return False
 
 class Reboot(Resource):
     #@ts.requires_role("user")
@@ -66,8 +91,9 @@ class Reboot(Resource):
             device = user_data.get('device')
             mode = user_data.get('mode')
             device_id = user_data.get('id')  # Getting from Redis
-            job_id = f'modemup_{serial}'
-            action = 'modem_on'
+            tgname = user_data.get('tgname')
+            # job_id = f'modemup_{serial}'
+            # action = 'modem_on'
 
             if not serial:
                 logging.error(f"Serial: {serial} NOT found in redis.")
@@ -80,15 +106,18 @@ class Reboot(Resource):
                 return {'reboot': 'in progress', 'message': 'Device is still rebooting.'}, 409
 
             if mode == "android":
+                logging.info(f'Rebooting: user: {tgname}, id{device_id}, {serial}')
                 adb_reboot_device(serial, device_id)
+                reboot_info_to_redis(tgname, device_id, serial)
                 return {'reboot': 'OK', 'message': 'Reboot is started.'}, 202
 
             if mode == "modem":
-                logging.info(f'Rebooting: id{device_id}, {serial}')
+                logging.info(f'Rebooting: user: {tgname}, id{device_id}, {serial}')
                 adb_reboot_device(serial, device_id)
-                logging.debug(f'Scheduling: id{device_id}, task: {job_id}')
-                scheduler.enqueue_in(timedelta(minutes=MODEM_UP_TIME), dispatcher, device, serial, action, job_id=job_id)
-                logging.info(f'CREATED JOB: id{device_id}, {job_id}, switch on modem in {MODEM_UP_TIME} min.')
+                reboot_info_to_redis(tgname, device_id, serial)
+                # logging.debug(f'Scheduling: id{device_id}, task: {job_id}')
+                # scheduler.enqueue_in(timedelta(minutes=MODEM_UP_TIME), dispatcher, device, serial, action, job_id=job_id)
+                # logging.info(f'CREATED JOB: id{device_id}, {job_id}, switch on modem in {MODEM_UP_TIME} min.')
                 return {'reboot': 'OK', 'message': 'Reboot is started, wait 1 minute.'}, 200
 
             logging.error(f"Unknown mode provided for device id: {device_id}, serial: {serial}.")
