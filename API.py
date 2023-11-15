@@ -3,6 +3,7 @@ from flask_restful import Resource, Api, reqparse
 from werkzeug.exceptions import BadRequest
 import time
 import os
+import logger_config
 import logging
 from logging.handlers import TimedRotatingFileHandler
 from ipaddress import ip_address, AddressValueError
@@ -20,24 +21,8 @@ from redis.exceptions import ResponseError, ConnectionError, TimeoutError, Redis
 
 load_dotenv()
 
-handler = TimedRotatingFileHandler(
-    '/var/log/supervisor/API.log',
-    when='midnight',  # смена файла в полночь
-    interval=1,       # интервал в сутках
-    backupCount=7,    # сохранять 7 последних копий
-)
-
-# Настраиваем формат для handler
-formatter = logging.Formatter(
-    '[%(asctime)s] [PID:%(process)d] [%(levelname)s] - %(message)s',
-    '%Y-%m-%d %H:%M:%S'
-)
-handler.setFormatter(formatter)
-
-# Получаем logger
+logger_config.setup_logger()
 logger = logging.getLogger()
-logger.setLevel(logging.DEBUG)
-logger.addHandler(handler)
 
 parser = reqparse.RequestParser()
 parser.add_argument('interval_seconds')
@@ -62,29 +47,29 @@ def reboot_info_to_redis(tgname, id, serial, expire=EXPIRY_TIME, db=REBOOT_RDB):
     try:
         r = sm.connect_to_redis(db)
         if r is None:
-            logging.error("Failed to connect to Redis. Aborting operation.")
+            logger.error("Failed to connect to Redis. Aborting operation.")
             return False
 
         r.setex(serial, expire, '')
 
-        logging.info(f"Stored reboot info: user {tgname}, id{id}, {serial}")
+        logger.info(f"Stored reboot info: user {tgname}, id{id}, {serial}")
         return True
         
     except redis.ConnectionError:
-        logging.error("Could not connect to Redis reboot DB")
+        logger.error("Could not connect to Redis reboot DB")
         return False
     except redis.TimeoutError:
-        logging.error("Redis operation timed out")
+        logger.error("Redis operation timed out")
         return False
     except Exception as e:
-        logging.error(f"An unknown error occurred while communicating with Redis: {e}")
+        logger.error(f"An unknown error occurred while communicating with Redis: {e}")
         return False
 
 class Reboot(Resource):
     #@ts.requires_role("user")
     def get(self, token):
         try:
-            logging.info("Received request: REBOOT")
+            logger.info("Received request: REBOOT")
 
             user_data = sm.get_data_from_redis(token)
             serial = user_data.get('serial')
@@ -96,35 +81,35 @@ class Reboot(Resource):
             # action = 'modem_on'
 
             if not serial:
-                logging.error(f"Serial: {serial} NOT found in redis.")
+                logger.error(f"Serial: {serial} NOT found in redis.")
                 return {'error': 'Serial number not found'}, 400
 
             reboot_status = os_boot_status(serial, device, device_id, enable_modem=False)
 
             if reboot_status != 'OK':
-                logging.warning(f"Device id: {device_id}, serial: {serial} is rebooting.")
+                logger.warning(f"Device id: {device_id}, serial: {serial} is rebooting.")
                 return {'reboot': 'in progress', 'message': 'Device is still rebooting.'}, 409
 
             if mode == "android":
-                logging.info(f'Rebooting: user: {tgname}, id{device_id}, {serial}')
+                logger.info(f'Rebooting: user: {tgname}, id{device_id}, {serial}')
                 adb_reboot_device(serial, device_id)
                 reboot_info_to_redis(tgname, device_id, serial)
                 return {'reboot': 'OK', 'message': 'Reboot is started.'}, 202
 
             if mode == "modem":
-                logging.info(f'Rebooting: user: {tgname}, id{device_id}, {serial}')
+                logger.info(f'Rebooting: user: {tgname}, id{device_id}, {serial}')
                 adb_reboot_device(serial, device_id)
                 reboot_info_to_redis(tgname, device_id, serial)
-                # logging.debug(f'Scheduling: id{device_id}, task: {job_id}')
+                # logger.debug(f'Scheduling: id{device_id}, task: {job_id}')
                 # scheduler.enqueue_in(timedelta(minutes=MODEM_UP_TIME), dispatcher, device, serial, action, job_id=job_id)
-                # logging.info(f'CREATED JOB: id{device_id}, {job_id}, switch on modem in {MODEM_UP_TIME} min.')
+                # logger.info(f'CREATED JOB: id{device_id}, {job_id}, switch on modem in {MODEM_UP_TIME} min.')
                 return {'reboot': 'OK', 'message': 'Reboot is started, wait 1 minute.'}, 200
 
-            logging.error(f"Unknown mode provided for device id: {device_id}, serial: {serial}.")
+            logger.error(f"Unknown mode provided for device id: {device_id}, serial: {serial}.")
             return {'error': 'Unknown mode provided'}, 400
 
         except Exception as e:
-            logging.error(f"Reboot_res: An error occurred: {str(e)}")
+            logger.error(f"Reboot_res: An error occurred: {str(e)}")
             return {'error': 'Internal server error'}, 500
 
 class DeviceStatus(Resource):
@@ -135,7 +120,7 @@ class DeviceStatus(Resource):
 
             if serial:
                 # For admin: serial directly provided
-                logging.info(f"Admin checking status: serial: {serial}")
+                logger.info(f"Admin checking status: serial: {serial}")
                 device_id = None
                 device = None
             else:
@@ -143,10 +128,10 @@ class DeviceStatus(Resource):
                 serial = user_data.get('serial')
                 device = user_data.get('device')
                 device_id = user_data.get('id')
-                logging.info(f"User checking status: id{device_id}, serial: {serial}")
+                logger.info(f"User checking status: id{device_id}, serial: {serial}")
 
             if not serial:
-                logging.error(f"Serial not found in user data: {serial}.")
+                logger.error(f"Serial not found in user data: {serial}.")
                 return {'error': 'Serial not found'}, 400
 
             device_status = get_adb_device_status(serial, device_id)
@@ -155,18 +140,18 @@ class DeviceStatus(Resource):
                 for i in range(3):
                     status = os_boot_status(serial, device, device_id, enable_modem=False)
                     if status == 'OK':
-                        #logging.info(f"Device {serial} is READY!")
+                        #logger.info(f"Device {serial} is READY!")
                         return {'status': 'OK', 'message': 'Device is ready.'}, 200
                     else:
-                        logging.warning(f"Device is not ready yet: {status}. Retry {i+1}/3")
+                        logger.warning(f"Device is not ready yet: {status}. Retry {i+1}/3")
                         time.sleep(2)
                 return {'status': 'in progress', 'message': 'Device not ready.'}, 200
 
             else:
-                logging.warning(f"Device is not in a good state: {device_status}")
+                logger.warning(f"Device is not in a good state: {device_status}")
                 return {'status': 'seems disconnected', 'message': f'Device is {device_status}'}, 400
         except Exception as e:
-            logging.error(f"An error occurred: {e}")
+            logger.error(f"An error occurred: {e}")
             return {"error": str(e)}, 500
 
 class ChangeIP(Resource):
@@ -183,15 +168,15 @@ class ChangeIP(Resource):
             last_ip_change_time = user_data.get('last_ip_change_time')
             current_time = datetime.now()
 
-            logging.info(f"IP CHANGE REQUEST: {tgname}, {http_port}, {socks_port}, id{id}, {username}, {serial}")
+            logger.info(f"IP CHANGE REQUEST: {tgname}, {http_port}, {socks_port}, id{id}, {username}, {serial}")
 
             if not serial:
-                logging.error(f"Serial NOT found in redis: id{id}, user {username}, serial: {serial}")
+                logger.error(f"Serial NOT found in redis: id{id}, user {username}, serial: {serial}")
                 return {'error': 'Serial not found'}, 400
             
             # Если last_ip_change_time не установлен, разрешаем смену IP
             if last_ip_change_time is None:
-                logging.warning("No IP change recorded previously, proceeding with IP change.")
+                logger.warning("No IP change recorded previously, proceeding with IP change.")
                 last_ip_change_time = current_time.timestamp()
 
             else:
@@ -200,40 +185,40 @@ class ChangeIP(Resource):
                 # Проверяем, прошло ли 30 секунд с последней смены IP
                 if time_passed < timedelta(seconds=CHANGE_IP_TIMEOUT):
                     time_left = CHANGE_IP_TIMEOUT - int(time_passed.total_seconds())
-                    logging.warning(f"IP CHANGE LIMIT REACHED: time left: {time_left} sec., {tgname}, {http_port}, {socks_port}, id{id}, {username}, {serial}")
+                    logger.warning(f"IP CHANGE LIMIT REACHED: time left: {time_left} sec., {tgname}, {http_port}, {socks_port}, id{id}, {username}, {serial}")
                     return {'error': f'You can only change IP once every {CHANGE_IP_TIMEOUT} seconds. Try again in {time_left} seconds.'}, 429
                 user_data['last_ip_change_time'] = current_time.timestamp()
                 
             # Check if device has ROOT
             if device not in ROOT:
-                logging.info(f"Airplane on\off via TOUCH: {tgname}, {device}, id{id}, {username}, {serial}")
+                logger.info(f"Airplane on\off via TOUCH: {tgname}, {device}, id{id}, {username}, {serial}")
                 if 'toggle_airplane' in MODEM_HANDLERS[device]:
                     MODEM_HANDLERS[device]['toggle_airplane'](serial)
                 else:
-                    logging.error(f"No 'toggle_airplane' for device {device}.")
+                    logger.error(f"No 'toggle_airplane' for device {device}.")
                     return {'error': 'Operation not supported for this device'}, 400
             else:
-                logging.info(f"Airplane on\off via CMD: {tgname}, {device}, id{id}, {username}, {serial}")
+                logger.info(f"Airplane on\off via CMD: {tgname}, {device}, id{id}, {username}, {serial}")
                 airplane_toggle_cmd(serial, device)
             
             fields_to_update = {'last_ip_change_time': current_time.timestamp()}
             sm.update_data_in_redis(token, fields_to_update)
-            logging.debug(f"Updated data for token: {token} with the following fields: {fields_to_update}")
+            logger.debug(f"Updated data for token: {token} with the following fields: {fields_to_update}")
 
-            logging.info(f"IP CHANGED: {tgname}, {device}, id{id}, {username}, {serial}")
+            logger.info(f"IP CHANGED: {tgname}, {device}, id{id}, {username}, {serial}")
             return {'status': 'success', 'message': 'IP was changed'}, 200
 
         except Exception as e:
-            logging.error(f"An error occurred: {e}")
+            logger.error(f"An error occurred: {e}")
             return {'status': 'failure', 'message': 'An error occurred while changing IP'}, 500
 
 class AutoChangeIP(Resource):
     def post(self, token):
         try:
-            logging.info("Received request: SET IP AUTO CHANGE")
+            logger.info("Received request: SET IP AUTO CHANGE")
 
             user_data = sm.get_data_from_redis(token)
-            logging.debug(f"GOT data from redis, token {token}")
+            logger.debug(f"GOT data from redis, token {token}")
             serial = user_data.get('serial')
             device_id = user_data.get('id')
             device_model = user_data.get('device')
@@ -241,7 +226,7 @@ class AutoChangeIP(Resource):
             job_id = f"changeip_{serial}"
 
             if not serial:
-                logging.error("Serial number not found in user_data.")
+                logger.error("Serial number not found in user_data.")
                 return {'error': 'Serial number not found'}, 400
 
             args = parser.parse_args()
@@ -260,10 +245,10 @@ class AutoChangeIP(Resource):
                         scheduler.cancel(job_id)  # cancel job if interval_seconds == 0
                         # Verify job cancellation
                         if not check_job_exists(scheduler, job_id):
-                            logging.info(f'IP ROTATION CANCELED: {job_id}, id{device_id}, model: {device_model}')
+                            logger.info(f'IP ROTATION CANCELED: {job_id}, id{device_id}, model: {device_model}')
                             return {'status': 'success', 'message': f'IP rotation canceled'}, 200
                         else:
-                            logging.error(f'IP ROTATION CANCELLATION FAILED: {job_id}, id{device_id}, model: {device_model}')
+                            logger.error(f'IP ROTATION CANCELLATION FAILED: {job_id}, id{device_id}, model: {device_model}')
                     elif interval_seconds >= ALLOWED_INTERVAL:
                         # cancel existing job and create a new one with updated interval
                         scheduler.cancel(job_id)
@@ -277,10 +262,10 @@ class AutoChangeIP(Resource):
                         )
                         # Verify job update
                         if check_job_exists(scheduler, job_id):
-                            logging.info(f'IP ROTATION UPDATED: {job_id}, id{device_id}, model: {device_model}, interval: {interval_seconds} sec.')
+                            logger.info(f'IP ROTATION UPDATED: {job_id}, id{device_id}, model: {device_model}, interval: {interval_seconds} sec.')
                             return {'status': 'success', 'message': f'IP rotation updated: interval {interval_seconds} sec'}, 200
                         else:
-                            logging.error(f'IP ROTATION UPDATE FAILED: {job_id}, id{device_id}, model: {device_model}')
+                            logger.error(f'IP ROTATION UPDATE FAILED: {job_id}, id{device_id}, model: {device_model}')
                 else:
                     if interval_seconds >= ALLOWED_INTERVAL:
                         # create a new job as it doesn't exist
@@ -294,29 +279,29 @@ class AutoChangeIP(Resource):
                         )
                         # Verify job creation
                         if check_job_exists(scheduler, job_id):
-                            logging.info(f'IP ROTATION SCHEDULED: {job_id}, id{device_id}, model: {device_model}, interval: {interval_seconds} sec.')
+                            logger.info(f'IP ROTATION SCHEDULED: {job_id}, id{device_id}, model: {device_model}, interval: {interval_seconds} sec.')
                             return {'status': 'success', 'message': f'IP rotation scheduled: interval {interval_seconds} sec'}, 200
                         else:
-                            logging.error(f'IP ROTATION SCHEDULING FAILED: {job_id}, id{device_id}, model: {device_model}')
+                            logger.error(f'IP ROTATION SCHEDULING FAILED: {job_id}, id{device_id}, model: {device_model}')
                     elif interval_seconds == 0:
-                        logging.warning(f'IP ROTATION NOT FOUND TO CANCEL: {job_id}, id{device_id}, model: {device_model}')
+                        logger.warning(f'IP ROTATION NOT FOUND TO CANCEL: {job_id}, id{device_id}, model: {device_model}')
                     else:
-                        logging.warning(f'INVALID INTERVAL: Interval cannot be less than 30 seconds. {job_id}, id{device_id}, model: {device_model}')
+                        logger.warning(f'INVALID INTERVAL: Interval cannot be less than 30 seconds. {job_id}, id{device_id}, model: {device_model}')
 
         except Exception as e:
-            logging.error(f"Error occurred in AutoChangeIP: {str(e)}")
+            logger.error(f"Error occurred in AutoChangeIP: {str(e)}")
             return {'status': 'failure', 'message': str(e)}, 500
 
 class DeleteUser(Resource):
     @ts.requires_role("admin")
     def delete(self, admin_token):
         try:
-            logging.info("Received request: DELETE USER.")
+            logger.info("Received request: DELETE USER.")
 
             data = request.json
-            logging.info(f"Got data: {data}")
+            logger.info(f"Got data: {data}")
             if data is None:
-                logging.error("Invalid request: JSON body required.")
+                logger.error("Invalid request: JSON body required.")
                 return {"message": "Invalid request: JSON body required"}, 400
 
             # Get proxy_id and token from JSON body
@@ -324,7 +309,7 @@ class DeleteUser(Resource):
 
             user_data = sm.get_data_from_redis(token)
 
-            logging.debug(f"GOT data from redis, token {token}")
+            logger.debug(f"GOT data from redis, token {token}")
 
             serial = user_data.get('serial')
             proxy_id = user_data.get('id')
@@ -332,54 +317,54 @@ class DeleteUser(Resource):
             username = user_data.get('username')
             tgname = user_data.get('tgname')
             
-            logging.debug(f"DATA: {token}, {serial}, {proxy_id}, {device}, {username}")
+            logger.debug(f"DATA: {token}, {serial}, {proxy_id}, {device}, {username}")
             
             if not proxy_id or not token or not username:
-                logging.error("Missing required fields: proxy_id and/or token/or username.")
+                logger.error("Missing required fields: proxy_id and/or token/or username.")
                 return {"message": "Missing required fields: proxy_id and/or token/or username"}, 400
 
             # Check if the user exists
             if not cm.username_exists_in_ACL(username):
-                logging.error("User does not exist.")
+                logger.error("User does not exist.")
                 return {"message": "User does not exist"}, 404
 
             # Check token and username in Redis
             user_data = sm.get_data_from_redis(token)
             if not user_data or user_data.get('id') != proxy_id:
-                logging.error("Invalid proxy_id or token.")
+                logger.error("Invalid proxy_id or token.")
                 return {"message": "Invalid proxy_id or token"}, 400
 
-            #logging.info(f"Reading config")
+            #logger.info(f"Reading config")
             lines = cm.read_file(CONFIG_PATH)
             
-            #logging.info(f"Counting username")
+            #logger.info(f"Counting username")
             count_users = cm.user_count_in_ACL(username, proxy_id, tgname, lines)
-            #logging.info(f"Count username: {count_users}")
+            #logger.info(f"Count username: {count_users}")
 
             if count_users == 1:
-                logging.info(f"User has only 1 proxy, removing ACL: {username}, id{proxy_id}")
+                logger.info(f"User has only 1 proxy, removing ACL: {username}, id{proxy_id}")
             elif count_users > 1:
-                logging.warning(f"User has {count_users} proxy, SKIP removing ACL: {username}, id{proxy_id}")
+                logger.warning(f"User has {count_users} proxy, SKIP removing ACL: {username}, id{proxy_id}")
 
             # Remove from configuration
             if not cm.remove_user_config(username, proxy_id, tgname):
-                logging.error(f"Failed to remove user's config: {username}, id{proxy_id}")
+                logger.error(f"Failed to remove user's config: {username}, id{proxy_id}")
                 return ({f"message": f"Failed to remove user's config: {username}, id{proxy_id}"}, 500)
 
             # Remove from ACL
             if count_users == 1:
                 if not cm.remove_user_from_acl(username):
-                    logging.error(f"Failed to remove user from ACL: {username}")
+                    logger.error(f"Failed to remove user from ACL: {username}")
                     return ({f"message": f"Failed to remove user from ACL: {username}"}, 500)
 
-                #logging.info(f"User removed from ACL: {username}")
+                #logger.info(f"User removed from ACL: {username}")
             elif count_users > 1:
-                logging.info(f"User has {count_users} proxy, SKIP removing ACL: {username}")
+                logger.info(f"User has {count_users} proxy, SKIP removing ACL: {username}")
             
             # Remove from Redis
             result = sm.delete_from_redis(token)
             if not result:
-                logging.error(f"Token not found in Redis or failed to remove: {token}")
+                logger.error(f"Token not found in Redis or failed to remove: {token}")
                 return ({f"message": f"Token not found in Redis or failed to remove: {token}"}, 404)
 
             if user_data.get('mode') == 'modem':
@@ -391,66 +376,66 @@ class DeleteUser(Resource):
                 status = status_handler(serial) if status_handler else None
 
                 if status == "device_not_found":
-                    logging.error(f"Device not found, possibly it has lost connection: id{device_id}, serial: {serial}")
+                    logger.error(f"Device not found, possibly it has lost connection: id{device_id}, serial: {serial}")
                 elif status == "timeout":
-                    logging.error(f"Device timed out, possibly it has lost connection: id{device_id}, serial: {serial}")
+                    logger.error(f"Device timed out, possibly it has lost connection: id{device_id}, serial: {serial}")
                 elif status == "rndis":
-                    logging.debug(f'Device in RNDIS')
+                    logger.debug(f'Device in RNDIS')
                     MODEM_HANDLERS[device]['modem_off'](serial)
-                    logging.info(f"RNDIS OFF: id{device_id}, serial: {serial}")
+                    logger.info(f"RNDIS OFF: id{device_id}, serial: {serial}")
                 else:
-                    logging.warning(f"NOT in RNDIS: {status}: id{device_id}, serial: {serial}")
+                    logger.warning(f"NOT in RNDIS: {status}: id{device_id}, serial: {serial}")
 
-            logging.info(f"User deleted: {username}")
+            logger.info(f"User deleted: {username}")
             return ({f"message": f"User deleted: {username}"}, 200)
 
         except BadRequest:
-            logging.error("Bad request, possibly malformed JSON.")
+            logger.error("Bad request, possibly malformed JSON.")
             return {"message": "Invalid JSON format received"}, 400
 
         except Exception as e:
-            logging.exception(f"An error occurred: {str(e)}")
+            logger.exception(f"An error occurred: {str(e)}")
             return {"message": f"An error occurred: {str(e)}"}, 500
 
 class UpdateAuth(Resource):
     @ts.requires_role("admin")
     def patch(self, admin_token):
         try:
-            logging.info("Received request: UPDATE AUTH.")
+            logger.info("Received request: UPDATE AUTH.")
 
             data = request.json
             if data is None:
-                logging.error("Invalid request: JSON body required.")
+                logger.error("Invalid request: JSON body required.")
                 return {"message": "Invalid request: JSON body required"}, 400
             
             # tgname = data.get('tgname')
             # if not tgname:
-            #     logging.error("Missing required field: tgname.")
+            #     logger.error("Missing required field: tgname.")
             #     return {"message": "Missing required field: tgname"}, 400
 
             # proxy_id = data.get('id')
             # if not proxy_id:
-            #     logging.error("Missing required field: id.")
+            #     logger.error("Missing required field: id.")
             #     return {"message": "Missing required field: id"}, 400
 
             token = data.get('token')
             if not token:
-                logging.error("Missing required field: token.")
+                logger.error("Missing required field: token.")
                 return {"message": "Missing required field: token"}, 400
 
             protocol = data.get('protocol')  # Should be either 'http', 'socks', or 'both'
             if not protocol:
-                logging.error("Missing required field: protocol.")
+                logger.error("Missing required field: protocol.")
                 return {"message": "Missing required field: protocol"}, 400
 
             auth_type = data.get('auth_type')
             if not auth_type:
-                logging.error("Missing required field: auth_type.")
+                logger.error("Missing required field: auth_type.")
                 return {"message": "Missing required field: auth_type"}, 400
 
             allow_ip = data.get('allow_ip')
             if not allow_ip:
-                logging.error("Missing required field: allow_ip.")
+                logger.error("Missing required field: allow_ip.")
                 return {"message": "Missing required field: allow_ip"}, 400
 
             user_data = sm.get_data_from_redis(token)
@@ -459,21 +444,21 @@ class UpdateAuth(Resource):
             tgname = user_data.get('tgname')
             proxy_id = user_data.get('id')
 
-            logging.info(f"Received DATA: id{proxy_id}, Username: {username}, Protocol: {protocol}, New Auth Type: {auth_type}, Allow ip: {allow_ip}")
+            logger.info(f"Received DATA: id{proxy_id}, Username: {username}, Protocol: {protocol}, New Auth Type: {auth_type}, Allow ip: {allow_ip}")
 
             if protocol not in ALLOWED_PROTOCOLS:
-                logging.error("Invalid protocol provided.")
+                logger.error("Invalid protocol provided.")
                 return {"message": "Invalid protocol provided"}, 400
 
             if auth_type == "strong":
                 allow_ip = username
             elif auth_type == "iponly":
                 if 'allow_ip' not in data:
-                    logging.error("allow_ip required for iponly auth_type.")
+                    logger.error("allow_ip required for iponly auth_type.")
                     return {"message": "allow_ip required for iponly auth_type"}, 400
                 allow_ip = data['allow_ip']
             else:
-                logging.error("Invalid auth_type provided.")
+                logger.error("Invalid auth_type provided.")
                 return {"message": "Invalid auth_type provided"}, 400
             
             messages = []
@@ -498,30 +483,30 @@ class UpdateAuth(Resource):
                     messages.append(f"Successfully updated for {protocol}")
 
             if messages:
-                logging.info(" | ".join(messages))
+                logger.info(" | ".join(messages))
                 if 'both' == protocol:
                     return {"message": " | ".join(messages)}, 200 if all([result1, result2]) else 400
                 else:
                     return {"message": " | ".join(messages)}, 200 if result else 400
 
         except Exception as e:
-            logging.error(f"An error occurred: {str(e)}")
+            logger.error(f"An error occurred: {str(e)}")
             return {"message": "Internal server error"}, 500
 
 class UpdateMode(Resource):
     @ts.requires_role("admin")
     def post(self, admin_token):
         try:
-            logging.info("Received request: UPDATE MODE.")
+            logger.info("Received request: UPDATE MODE.")
 
             data = request.json
             if data is None:
-                logging.warning("Invalid request: Missing JSON body")
+                logger.warning("Invalid request: Missing JSON body")
                 return {"message": "Invalid request: JSON body required"}, 400
 
             required_fields = ['token', 'new_mode', 'parent_ip', 'http_port', 'socks_port']
             if not all(data.get(field) for field in required_fields):
-                logging.warning("Missing required fields in data")
+                logger.warning("Missing required fields in data")
                 return {"message": "Missing required fields"}, 400
 
             token = data.get('token')
@@ -531,7 +516,7 @@ class UpdateMode(Resource):
             socks_port = int(data.get('socks_port'))
 
             if new_mode not in ['android', 'modem']:
-                logging.warning("Invalid mode. Use either 'android' or 'modem'")
+                logger.warning("Invalid mode. Use either 'android' or 'modem'")
                 return {"message": "Invalid mode. Use either 'android' or 'modem'"}, 400
 
             # Проверка корректности parent_ip
@@ -539,43 +524,43 @@ class UpdateMode(Resource):
                 try:
                     ip_address(parent_ip)
                 except AddressValueError:
-                    logging.warning("Invalid parent IP address")
+                    logger.warning("Invalid parent IP address")
                     return {"message": "Invalid parent IP address. Should be a valid IPv4 or IPv6 address."}, 400
 
-            logging.debug(f"Got: token: {token}, new_mode: {new_mode}, parent_ip: {parent_ip}, http_port: {http_port}, socks_port: {socks_port}")
+            logger.debug(f"Got: token: {token}, new_mode: {new_mode}, parent_ip: {parent_ip}, http_port: {http_port}, socks_port: {socks_port}")
 
             if not (10000 <= http_port <= 65000 and 10000 <= socks_port <= 65000):
-                logging.warning("Port numbers out of allowed range")
+                logger.warning("Port numbers out of allowed range")
                 return {"message": "Port numbers should be between 10000 and 65000"}, 400
 
             response = cm.update_mode_in_config(new_mode, parent_ip, token, http_port, socks_port)
             
-            logging.info("Successfully updated mode.")
+            logger.info("Successfully updated mode.")
             return {"message": response["message"]}, response["status_code"]
             
         except Exception as e:
-            logging.error(f"An error occurred: {str(e)}")
+            logger.error(f"An error occurred: {str(e)}")
             return {"message": f"Internal server error: {str(e)}"}, 500
 
 class AddUserModem(Resource):
     @ts.requires_role("admin")
     def post(self, admin_token):
         try:
-            logging.info("Received request: ADD USER MODEM.")
+            logger.info("Received request: ADD USER MODEM.")
             
             data = request.json
             if data is None:
-                logging.warning("Invalid request: Missing JSON body")
+                logger.warning("Invalid request: Missing JSON body")
                 return {"message": "Invalid request: JSON body required"}, 400
 
-            logging.info(f"Received data: {data}")
+            logger.info(f"Received data: {data}")
 
             required_fields = ['username', 'password', 'http_port', 'socks_port', 'serial', 'device', 'id', 'tgname']
 
             data, error_message, error_code = ts.validate_and_extract_data(required_fields)
 
             if error_message:
-                logging.warning(f"Validation failed: {error_message}")
+                logger.warning(f"Validation failed: {error_message}")
                 return error_message, error_code
 
             user_data = {field: data[field] for field in required_fields}
@@ -600,103 +585,103 @@ class AddUserModem(Resource):
 
             #check existing in redis
             if sm.serial_exists(user_data['serial']):
-                logging.warning(f"Serial already exists: {user_data['serial']}")
+                logger.warning(f"Serial already exists: {user_data['serial']}")
                 return {"message": f"Serial already exists: {user_data['serial']}"}, 400
 
-            logging.info(f"Redis check OK: {user_data['username']}")
+            logger.info(f"Redis check OK: {user_data['username']}")
             
             status_handler = MODEM_HANDLERS.get(user_data['device'], {}).get('modem_status')
             status = status_handler(user_data['serial']) if status_handler else None
 
             if status == "device_not_found":
-                logging.error("Device not found, possibly it has lost connection")
+                logger.error("Device not found, possibly it has lost connection")
                 return {"message": "Device not found, possibly it has lost connection"}, 500
             elif status == "timeout":
-                logging.error("Device timed out, possibly it has lost connection")
+                logger.error("Device timed out, possibly it has lost connection")
                 return {"message": "Device timed out, possibly it has lost connection"}, 500
 
             if status == "rndis":
                 interface_name = f"id{user_data['id']}"
                 ip_address = wait_for_ip(interface_name)
                 if ip_address != '127.0.0.1':
-                    logging.info(f"Modem is already on, IP: {ip_address}")
+                    logger.info(f"Modem is already on, IP: {ip_address}")
 
             else:
                 handler = MODEM_HANDLERS.get(user_data['device'], {}).get('modem_on')
-                logging.debug(f'HANDLER 1: {handler}, maybe wrong device model')
+                logger.debug(f'HANDLER 1: {handler}, maybe wrong device model')
                 handler(user_data['serial'])
                 interface_name = f"id{user_data['id']}"
                 ip_address = wait_for_ip(interface_name)
                 if ip_address != '127.0.0.1':
-                    logging.info("Modem turned on successfully")
+                    logger.info("Modem turned on successfully")
                 else:
-                    logging.error("Interface not ready, unable to get IP address")
+                    logger.error("Interface not ready, unable to get IP address")
                     return {"message": "Interface not ready, unable to get IP address"}, 500
 
             token = ts.generate_short_token()
-            logging.info(f"Generated token: {token}")
+            logger.info(f"Generated token: {token}")
 
             acl_result = cm.add_user_to_acl(user_data['username'], user_data['password'])
             config_result = cm.add_user_config(user_data['username'], user_data['mode'], user_data['http_port'], user_data['socks_port'], user_data['id'], user_data['tgname'])
 
             if not acl_result:
-                logging.error(f"Failed to add user to ACL. Aborting operation.: {user_data['username']}")
+                logger.error(f"Failed to add user to ACL. Aborting operation.: {user_data['username']}")
                 return {"message": "Failed to add user to ACL"}, 500
             else:
-                logging.info(f"Added user to ACL: {user_data['username']}")
+                logger.info(f"Added user to ACL: {user_data['username']}")
 
             if not config_result:
-                logging.error(f"Failed to add config. Rolling back ACL.: {user_data['username']}.")
+                logger.error(f"Failed to add config. Rolling back ACL.: {user_data['username']}.")
                 cm.remove_user_from_acl(user_data['username'])
                 return {"message": "Failed to add user config. Rolled back ACL"}, 500
             else:
-                logging.info(f"Added user config: {user_data['username']}.")
+                logger.info(f"Added user config: {user_data['username']}.")
 
             data_to_redis = ['tgname', 'username', 'id', 'serial', 'device', 'http_port', 'socks_port', 'mode']
             data_to_redis_storage = {field: user_data[field] for field in data_to_redis}
             redis_result = sm.store_to_redis(data_to_redis_storage, token)
 
             if not redis_result:
-                logging.error(f"Failed to store user data to Redis for user {user_data['username']} id{user_data['id']}. Rolling back ACL and config.")
+                logger.error(f"Failed to store user data to Redis for user {user_data['username']} id{user_data['id']}. Rolling back ACL and config.")
                 cm.remove_user_from_acl(user_data['username'])
                 cm.remove_user_config(user_data['username'], user_data['id'])
                 return {"message": "Failed to store user data to Redis. Rolled back ACL and config"}, 500
             else:
-                logging.info(f"Added data to redis: {user_data['username']}, id{user_data['id']}.")
+                logger.info(f"Added data to redis: {user_data['username']}, id{user_data['id']}.")
 
-                logging.info(f"User added: {user_data['username']}")
+                logger.info(f"User added: {user_data['username']}")
                 return {
                     "message": f"User added successfully: {user_data['username']}",
                     "token": token
                 }, 201
         
         except BadRequest:
-            logging.error("Bad request, possibly malformed JSON.")
+            logger.error("Bad request, possibly malformed JSON.")
             return {"message": "Invalid JSON format received"}, 400
 
         except Exception as e:
-            logging.error(f"An error occurred: {str(e)}")
+            logger.error(f"An error occurred: {str(e)}")
             return {"message": f"Internal server error: {str(e)}"}, 500
 
 class AddUserAndroid(Resource):
     @ts.requires_role("admin")
     def post(self, admin_token):
         try:
-            logging.info("Received request: ADD USER ANDROID.")
+            logger.info("Received request: ADD USER ANDROID.")
             
             data = request.json
             if data is None:
-                logging.warning("Invalid request: Missing JSON body")
+                logger.warning("Invalid request: Missing JSON body")
                 return {"message": "Invalid request: JSON body required"}, 400
 
-            logging.info(f"Received data: {data}")
+            logger.info(f"Received data: {data}")
 
             required_fields = ['username', 'password', 'http_port', 'socks_port', 'serial', 'device', 'id', 'parent_ip', 'tgname']
 
             data, error_message, error_code = ts.validate_and_extract_data(required_fields)
 
             if error_message:
-                logging.warning(f"Validation failed: {error_message}")
+                logger.warning(f"Validation failed: {error_message}")
                 return error_message, error_code
 
             user_data = {field: data[field] for field in required_fields}
@@ -720,79 +705,79 @@ class AddUserAndroid(Resource):
             #         return error_message, error_code
 
             if sm.serial_exists(user_data['serial']):
-                logging.warning(f"Serial already exists: {user_data['serial']}")
+                logger.warning(f"Serial already exists: {user_data['serial']}")
                 return {"message": f"Serial already exists: {user_data['serial']}"}, 400
 
-            logging.info(f"Redis check OK: {user_data['username']}")
+            logger.info(f"Redis check OK: {user_data['username']}")
 
             #checking modem
             status_handler = MODEM_HANDLERS.get(user_data['device'], {}).get('modem_status')
             status = status_handler(user_data['serial']) if status_handler else None
             
             if status == "device_not_found":
-                logging.error("Device not found, possibly it has lost connection")
+                logger.error("Device not found, possibly it has lost connection")
                 return {"message": "Device not found, possibly it has lost connection"}, 500
             elif status == "timeout":
-                logging.error("Device timed out, possibly it has lost connection")
+                logger.error("Device timed out, possibly it has lost connection")
                 return {"message": "Device timed out, possibly it has lost connection"}, 500
 
             if status == "rndis":
                 handler = MODEM_HANDLERS.get(user_data['device'], {}).get('modem_off')
                 handler(user_data['serial'])
-                logging.info("Modem turned off successfully")
+                logger.info("Modem turned off successfully")
             else:
-                logging.warning("Modem is NOT turned off")
+                logger.warning("Modem is NOT turned off")
 
             token = ts.generate_short_token()
-            logging.info(f"Generated token: {token}")
+            logger.info(f"Generated token: {token}")
 
             acl_result = cm.add_user_to_acl(user_data['username'], user_data['password'])
             config_result = cm.add_user_config(user_data['username'], user_data['mode'], user_data['http_port'], user_data['socks_port'], user_data['id'], user_data['tgname'], user_data['parent_ip'])
 
             if not acl_result:
-                logging.error(f"Failed to add user to ACL. Aborting operation.: {user_data['username']}")
+                logger.error(f"Failed to add user to ACL. Aborting operation.: {user_data['username']}")
                 return {"message": "Failed to add user to ACL"}, 500
             else:
-                logging.info(f"Added user to ACL: {user_data['username']}")
+                logger.info(f"Added user to ACL: {user_data['username']}")
 
             if not config_result:
-                logging.error(f"Failed to add config. Rolling back ACL.: {user_data['username']}.")
+                logger.error(f"Failed to add config. Rolling back ACL.: {user_data['username']}.")
                 cm.remove_user_from_acl(user_data['username'])
                 return {"message": "Failed to add user config. Rolled back ACL"}, 500
             else:
-                logging.info(f"Added user config: {user_data['username']}.")
+                logger.info(f"Added user config: {user_data['username']}.")
 
             data_to_redis = ['serial', 'device', 'mode', 'id', 'username', 'parent_ip', 'tgname']
             data_to_redis_storage = {field: user_data[field] for field in data_to_redis}
             redis_result = sm.store_to_redis(data_to_redis_storage, token)
 
             if not redis_result:
-                logging.error(f"Failed to store user data to Redis for user {user_data['username']} id{user_data['id']}. Rolling back ACL and config.")
+                logger.error(f"Failed to store user data to Redis for user {user_data['username']} id{user_data['id']}. Rolling back ACL and config.")
                 cm.remove_user_from_acl(user_data['username'])
                 cm.remove_user_config(user_data['username'], user_data['id'])
                 return {"message": "Failed to store user data to Redis. Rolled back ACL and config"}, 500
             else:
-                logging.info(f"Added data to redis: {user_data['username']}, id{user_data['id']}.")
+                logger.info(f"Added data to redis: {user_data['username']}, id{user_data['id']}.")
 
-                logging.info(f"User added: {user_data['username']}")
+                logger.info(f"User added: {user_data['username']}")
                 return {
                     "message": f"User added successfully: {user_data['username']}",
                     "token": token
                 }, 201
         
         except BadRequest:
-            logging.error("Bad request, possibly malformed JSON.")
+            logger.error("Bad request, possibly malformed JSON.")
             return {"message": "Invalid JSON format received"}, 400
 
         except Exception as e:
-            logging.error(f"An error occurred: TOKEN: {token} ERROR: {str(e)}")
+            logger.error(f"An error occurred: TOKEN: {token} ERROR: {str(e)}")
             return {f"Internal server error: {token}, {str(e)}"}, 500
 
 class UpdateUser(Resource):
     @ts.requires_role("admin")
     def patch(self, admin_token):
         try:
-            logging.info("Received request: UPDATE LOGOPASS.")
+            logger.info("Received request: UPDATE LOGOPASS.")
             
             data = request.json
             if data is None:
@@ -800,7 +785,7 @@ class UpdateUser(Resource):
             
             token = data.get('token')
             if not token:
-                logging.warning(f"Invalid or missing device token: {token}.")
+                logger.warning(f"Invalid or missing device token: {token}.")
                 return {"message": f"Invalid or missing device token: {token}"}, 400
 
             new_username = data.get('new_username')
@@ -820,7 +805,7 @@ class UpdateUser(Resource):
 
             if update_username:
                 if not cm.username_exists_in_ACL(old_username):
-                    logging.error(f"User {old_username} does not exist")
+                    logger.error(f"User {old_username} does not exist")
                     return {"message": f"User {old_username} does not exist"}, 404
 
                 if not cm.update_user_in_acl(old_username, new_username, old_password, new_password, proxy_id) or \
@@ -830,20 +815,20 @@ class UpdateUser(Resource):
                 if not sm.update_data_in_redis(token, {'username': new_username}):
                     raise Exception("Failed to update data in Redis")
 
-                logging.debug(f"Username updated in ACL, CONFIG, REDIS: {old_username} --> {new_username}, {old_password} --> {new_password} ")
+                logger.debug(f"Username updated in ACL, CONFIG, REDIS: {old_username} --> {new_username}, {old_password} --> {new_password} ")
                 return {"message": "Username updated successfully"}, 200
 
             if update_password:
-                logging.info(f"TO CHECK PASS: {old_password}")
+                logger.info(f"TO CHECK PASS: {old_password}")
                 if not cm.password_exists_in_ACL(old_password):
-                    logging.error(f"USER with password {old_password} does not exist")
+                    logger.error(f"USER with password {old_password} does not exist")
                     return {"UpdateUser": "User with password does not exist"}, 404
 
                 if not cm.update_user_in_acl(old_username, new_username, old_password, new_password, proxy_id) or \
                         not cm.update_user_in_config(old_username, new_username, proxy_id, tgname):
                     raise Exception("Failed to update password")
                 
-                logging.info(f"Password updated successfully")
+                logger.info(f"Password updated successfully")
                 return {"message": "Password updated successfully"}, 200
 
 
@@ -856,7 +841,7 @@ class UpdateUser(Resource):
 
         except Exception as e:
             # ... (your rollback logic)
-            logging.error(f"An error occurred: {str(e)}")
+            logger.error(f"An error occurred: {str(e)}")
             return {"message": "Internal server error"}, 500
 
 class ReplaceAndroid(Resource):
@@ -864,18 +849,18 @@ class ReplaceAndroid(Resource):
     def patch(self, admin_token):
         pipe = sm.get_redis_pipeline()
         if not pipe:
-            logging.error("Could not get Redis pipeline. Aborting operation.")
+            logger.error("Could not get Redis pipeline. Aborting operation.")
             return {"message": "Internal server error"}, 500
 
         try:
-            logging.info("Received request: REPLACE ANDROID")
+            logger.info("Received request: REPLACE ANDROID")
 
             required_fields = ['token', 'new_id', 'new_serial', 'new_device', 'new_parent_ip']
             
             data, error_message, error_code = ts.validate_and_extract_data(required_fields)
         
             if error_message:
-                logging.warning(f"Validation failed: {error_message}")
+                logger.warning(f"Validation failed: {error_message}")
                 return error_message, error_code
 
             token = data.get('token')
@@ -884,11 +869,11 @@ class ReplaceAndroid(Resource):
             new_device = data.get('new_device')
             new_parent_ip = data.get('new_parent_ip')
 
-            logging.debug(f'DATA JSON: token {token}, new_id {new_id}, new_serial {new_serial}, new_device {new_device}, new_parent_ip {new_parent_ip}')
+            logger.debug(f'DATA JSON: token {token}, new_id {new_id}, new_serial {new_serial}, new_device {new_device}, new_parent_ip {new_parent_ip}')
 
             redis_data = sm.get_data_from_redis(token)
             if not redis_data:
-                logging.error(f"No data for token: {token}. Exiting.")
+                logger.error(f"No data for token: {token}. Exiting.")
                 return {"message": f"No data for token: {token}", "status_code": 404}
 
             username = redis_data.get('username', '')
@@ -898,17 +883,17 @@ class ReplaceAndroid(Resource):
             old_parent_ip = redis_data.get('parent_ip', '')
             tgname = redis_data.get('tgname')
             
-            logging.debug(f'DATA REDIS: username: {username}, id: {old_id}, serial: {old_serial}, device: {old_device}, parent_ip: {old_parent_ip}, tgname: {tgname}')
+            logger.debug(f'DATA REDIS: username: {username}, id: {old_id}, serial: {old_serial}, device: {old_device}, parent_ip: {old_parent_ip}, tgname: {tgname}')
 
             # if not cm.android_ip_exists_in_config(old_parent_ip):
-            #     logging.error(f"IP is NOT found: {old_parent_ip}")
+            #     logger.error(f"IP is NOT found: {old_parent_ip}")
             #     return {"message": f"IP is NOT found: {old_parent_ip}"}, 404
 
             if not cm.replace_android_in_config(old_parent_ip, new_parent_ip, old_id, new_id, username, tgname):
-                logging.error(f"IP is NOT replaced: TOKEN {token}, TGNAME {tgname}, OLD IP {old_parent_ip}")
+                logger.error(f"IP is NOT replaced: TOKEN {token}, TGNAME {tgname}, OLD IP {old_parent_ip}")
                 return {"message": f"IP is NOT replaced: TOKEN {token}, TGNAME {tgname}, OLD IP {old_parent_ip}"}, 404
 
-            logging.info(f"IP in CONFIG is replaced: {old_parent_ip} --> {new_parent_ip}")
+            logger.info(f"IP in CONFIG is replaced: {old_parent_ip} --> {new_parent_ip}")
 
             pipe.hset(token, 'parent_ip', new_parent_ip)
             pipe.hset(token, 'device', new_device)
@@ -916,14 +901,14 @@ class ReplaceAndroid(Resource):
             pipe.hset(token, 'id', new_id)
 
             if not sm.execute_pipeline(pipe):
-                logging.error("Failed to execute Redis pipeline. Aborting operation.")
+                logger.error("Failed to execute Redis pipeline. Aborting operation.")
                 return {"message": "Internal server error"}, 500
 
-            logging.info(f"Android replaced: {tgname}, {old_parent_ip} --> {new_parent_ip}, id{old_id} --> id{new_id}, {old_serial} --> {new_serial}, {old_device} --> {new_device}")
+            logger.info(f"Android replaced: {tgname}, {old_parent_ip} --> {new_parent_ip}, id{old_id} --> id{new_id}, {old_serial} --> {new_serial}, {old_device} --> {new_device}")
             return {"message": f"Android replaced: tgname: {tgname}, id{old_id} --> id{new_id}"}, 200
 
         except Exception as e:
-            logging.error(f"An error occurred: {str(e)}")
+            logger.error(f"An error occurred: {str(e)}")
             return {"message": f"No data for token: {token}", "status_code": 404}
 
 class ReplaceModem(Resource):
@@ -931,18 +916,18 @@ class ReplaceModem(Resource):
     def patch(self, admin_token):
         pipe = sm.get_redis_pipeline()
         if not pipe:
-            logging.error("Could not get Redis pipeline. Aborting operation.")
+            logger.error("Could not get Redis pipeline. Aborting operation.")
             return {"message": "Internal server error"}, 500
 
         try:
-            logging.info("Received request: REPLACE MODEM")
+            logger.info("Received request: REPLACE MODEM")
 
             required_fields = ['token', 'new_id', 'new_serial', 'new_device']
             
             data, error_message, error_code = ts.validate_and_extract_data(required_fields)
 
             if error_message:
-                logging.warning(f"Validation failed: {error_message}")
+                logger.warning(f"Validation failed: {error_message}")
                 return error_message, error_code
 
             token = data.get('token')
@@ -952,7 +937,7 @@ class ReplaceModem(Resource):
 
             redis_data = sm.get_data_from_redis(token)
             if not redis_data:
-                logging.error(f"No data for token: {token}. Exiting.")
+                logger.error(f"No data for token: {token}. Exiting.")
                 return {"message": f"No data for token: {token}", "status_code": 404}
 
             username = redis_data.get('username', '')
@@ -962,27 +947,27 @@ class ReplaceModem(Resource):
             tgname = redis_data.get('tgname', '')
 
             if not cm.modem_id_exists_in_config(old_id, username, tgname):
-                logging.error(f"ID is NOT found: id{old_id}")
+                logger.error(f"ID is NOT found: id{old_id}")
                 return {"message": f"ID is NOT found: id{old_id}"}, 404
 
             if not cm.replace_modem_in_config(old_id, new_id, tgname, username):
-                logging.error(f"ID is NOT replaced: {old_id}")
+                logger.error(f"ID is NOT replaced: {old_id}")
                 return {"message": f"IP is NOT replaced: {old_id}"}, 404
-            logging.info(f"ID is replaced: id{old_id} --> id{new_id}")
+            logger.info(f"ID is replaced: id{old_id} --> id{new_id}")
 
             pipe.hset(token, 'id', new_id)
             pipe.hset(token, 'serial', new_serial)
             pipe.hset(token, 'device', new_device)
 
             if not sm.execute_pipeline(pipe):
-                logging.error("Failed to execute Redis pipeline. Aborting operation.")
+                logger.error("Failed to execute Redis pipeline. Aborting operation.")
                 return {"message": "Internal server error"}, 500
 
-            logging.info(f"Modem replaced: id{old_id} --> id{new_id}, {old_serial} --> {new_serial}, {old_device} --> {new_device}")
+            logger.info(f"Modem replaced: id{old_id} --> id{new_id}, {old_serial} --> {new_serial}, {old_device} --> {new_device}")
             return {"message": f"Modem replaced: id{old_id} --> id{new_id}"}, 200
 
         except Exception as e:
-            logging.error(f"An error occurred: {str(e)}")
+            logger.error(f"An error occurred: {str(e)}")
             return {"message": "Internal server error"}, 500
 
 class ProxyCount(Resource):
@@ -992,12 +977,12 @@ class ProxyCount(Resource):
         cursor = None
 
         try:
-            logging.info("Received request: GET PROXY COUNT.")
+            logger.info("Received request: GET PROXY COUNT.")
 
-            logging.info("Attempting to connect to MySQL...")
+            logger.info("Attempting to connect to MySQL...")
             connection = sm.connect_to_mysql()
             if connection is None:
-                logging.error("Failed to connect to MySQL.")
+                logger.error("Failed to connect to MySQL.")
                 raise Exception("Failed to connect to MySQL")
 
             cursor = connection.cursor(dictionary=True)
@@ -1014,11 +999,11 @@ class ProxyCount(Resource):
             """
             cursor.execute(sql)
             results = cursor.fetchall()
-            logging.info("Proxy count query executed successfully")
+            logger.info("Proxy count query executed successfully")
             return results, 200
 
         except Exception as e:
-            logging.error(f"An error occurred: {str(e)}")
+            logger.error(f"An error occurred: {str(e)}")
             return {"message": "Internal server error"}, 500
 
         finally:
@@ -1031,7 +1016,7 @@ class ModemStatus(Resource):
     @ts.requires_role("admin")
     def post(self, admin_token):
         try:
-            logging.info("Received request to CHECK MODEM STATUS.")
+            logger.info("Received request to CHECK MODEM STATUS.")
 
             data = request.json
             if data is None:
@@ -1045,35 +1030,35 @@ class ModemStatus(Resource):
             mode = user_data.get('mode')
             
             if not serial_number:
-                logging.error("Serial number not found in user data.")
+                logger.error("Serial number not found in user data.")
                 return {'error': 'Serial number not found'}, 400
 
             handler = MODEM_HANDLERS.get(device_model, {}).get('modem_status')
             if not handler:
-                logging.error("Invalid device model provided. Use a correct 'device' field.")
+                logger.error("Invalid device model provided. Use a correct 'device' field.")
                 return {"message": "Invalid device model provided. Use a correct 'device' field."}, 400
 
             status = handler(serial_number) if handler else None
 
             if status == "device_not_found":
-                logging.error("Device not found, possibly it has lost connection")
+                logger.error("Device not found, possibly it has lost connection")
                 return {"message": "Device not found, possibly it has lost connection"}, 500
             elif status == "timeout":
-                logging.error("Device timed out, possibly it has lost connection")
+                logger.error("Device timed out, possibly it has lost connection")
                 return {"message": "Device timed out, possibly it has lost connection"}, 500
 
-            logging.info(f"Modem status for serial {serial_number}: {status}")
+            logger.info(f"Modem status for serial {serial_number}: {status}")
             return {"message": status}, 200
 
         except Exception as e:
-            logging.error(f"An error occurred: {str(e)}")
+            logger.error(f"An error occurred: {str(e)}")
             return {"message": f"An error occurred: {str(e)}"}, 500
 
 class ModemUp(Resource):
     @ts.requires_role("admin")
     def post(self, admin_token):
         try:
-            logging.info("Received request to SWITCH MODEM.")
+            logger.info("Received request to SWITCH MODEM.")
 
             data = request.json
             if data is None:
@@ -1088,7 +1073,7 @@ class ModemUp(Resource):
             id = user_data.get('id')
             interface_name = f'id{id}'
 
-            logging.info(f"SWITCHING to {mode}: id{id}, type {device_model}, serial {serial_number}")
+            logger.info(f"SWITCHING to {mode}: id{id}, type {device_model}, serial {serial_number}")
 
             if not all([serial_number, device_model, mode]):
                 return {"message": "Missing required fields"}, 400
@@ -1097,45 +1082,45 @@ class ModemUp(Resource):
             status = status_handler(serial_number) if status_handler else None
 
             if status == "device_not_found":
-                logging.error("Device not found, possibly it has lost connection")
+                logger.error("Device not found, possibly it has lost connection")
                 return {"message": "Device not found, possibly it has lost connection"}, 500
             elif status == "timeout":
-                logging.error("Device timed out, possibly it has lost connection")
+                logger.error("Device timed out, possibly it has lost connection")
                 return {"message": "Device timed out, possibly it has lost connection"}, 500
 
             if mode == "modem":
                 if status == "rndis":
                     ip_address = wait_for_ip(interface_name)
                     if ip_address != '127.0.0.1':
-                        logging.info("Modem is already on")
+                        logger.info("Modem is already on")
                         return {"message": "Modem is already on", "ip_address": ip_address}, 200
-                    logging.error("Interface not ready, unable to get IP address")
+                    logger.error("Interface not ready, unable to get IP address")
                     return {"message": "Interface not ready, unable to get IP address"}, 500
                 else:
                     handler = MODEM_HANDLERS.get(device_model, {}).get('modem_on')
                     handler(serial_number)
                     ip_address = wait_for_ip(interface_name)
                     if ip_address != '127.0.0.1':
-                        logging.info("Modem turned on successfully")
+                        logger.info("Modem turned on successfully")
                         return {"message": "Modem turned on successfully", "ip_address": ip_address}, 200
-                    logging.error("Interface not ready, unable to get IP address")
+                    logger.error("Interface not ready, unable to get IP address")
                     return {"message": "Interface not ready, unable to get IP address"}, 500
 
             elif mode == "android":
                 if status == "rndis":
                     handler = MODEM_HANDLERS.get(device_model, {}).get('modem_off')
                     handler(serial_number)
-                    logging.info("Modem turned off successfully")
+                    logger.info("Modem turned off successfully")
                     return {"message": "Modem turned off successfully"}, 200
                 else:
-                    logging.info("Modem is already turned off")
+                    logger.info("Modem is already turned off")
                     return {"message": "Modem is already turned off"}, 200
             else:
-                logging.error("Invalid mode provided. Use either 'modem' or 'parent' as mode field.")
+                logger.error("Invalid mode provided. Use either 'modem' or 'parent' as mode field.")
                 return {"message": "Invalid mode provided. Use either 'modem' or 'parent' as mode field."}, 400
 
         except Exception as e:
-            logging.error(f"An error occurred: {str(e)}")
+            logger.error(f"An error occurred: {str(e)}")
             return {"message": "Internal server error"}, 500
 
 #resources

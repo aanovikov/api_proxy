@@ -9,6 +9,8 @@ from redis.lock import Lock
 
 load_dotenv()
 
+logger = logging.getLogger()
+
 MYSQL_SETTINGS = {
     "host": os.getenv('MYSQL_HOST'),
     "user": os.getenv('MYSQL_USER'),
@@ -24,10 +26,10 @@ def connect_to_mysql():
     try:
         connection = mysql.connector.connect(**MYSQL_SETTINGS)
         if connection.is_connected():
-            logging.info("Successfully connected to MySQL.")
+            logger.info("Successfully connected to MySQL.")
             return connection
     except Exception as e:
-        logging.error(f"Failed to connect to MySQL: {str(e)}")
+        logger.error(f"Failed to connect to MySQL: {str(e)}")
         return None
 
 def connect_to_redis(db=0):
@@ -37,38 +39,38 @@ def connect_to_redis(db=0):
         r.ping()
         return r
     except redis.ConnectionError:
-        logging.error("Failed to connect to Redis. Aborting operation.")
+        logger.error("Failed to connect to Redis. Aborting operation.")
         return None
 
 def store_to_redis(data, token):
     try:
         r = connect_to_redis()
         if r is None:
-            logging.error("Failed to connect to Redis. Aborting operation.")
+            logger.error("Failed to connect to Redis. Aborting operation.")
             return False
 
         if not r.hset(token, mapping=data):
-            logging.error(f"Failed to store data for token: {token}")
+            logger.error(f"Failed to store data for token: {token}")
             return False
 
-        logging.info(f"Stored data for token: {token}")
+        logger.info(f"Stored data for token: {token}")
         return True
         
     except redis.ConnectionError:
-        logging.error("Could not connect to Redis")
+        logger.error("Could not connect to Redis")
         return False
     except redis.TimeoutError:
-        logging.error("Redis operation timed out")
+        logger.error("Redis operation timed out")
         return False
     except Exception as e:
-        logging.error(f"An unknown error occurred while communicating with Redis: {e}")
+        logger.error(f"An unknown error occurred while communicating with Redis: {e}")
         return False
 
 def get_data_from_redis(token):
     r = connect_to_redis()
     all_values = r.hgetall(token)
     if not all_values:
-        logging.error(f"No data found for token {token}")
+        logger.error(f"No data found for token {token}")
         #traceback.print_stack()
         raise Exception(f"No data found for token {token}")
     return {k.decode('utf-8'): v.decode('utf-8') for k, v in all_values.items()}
@@ -76,22 +78,22 @@ def get_data_from_redis(token):
 def update_data_in_redis(token, fields):
     pipe = get_redis_pipeline()
     if not pipe:
-        logging.error("Could not get Redis pipeline. Aborting operation.")
+        logger.error("Could not get Redis pipeline. Aborting operation.")
         return False
 
     for field, value in fields.items():
         pipe.hset(token, field, value)
 
     if not execute_pipeline(pipe):
-        logging.error(f"Failed to update data for token: {token}")
+        logger.error(f"Failed to update data for token: {token}")
         return False
 
-    logging.info(f"Updated data: token: {token}, NEW {field} = {value}")
+    logger.info(f"Updated data: token: {token}, NEW {field} = {value}")
     return True
 
 def delete_from_redis(token):
     try:
-        logging.info(f"Deleting Redis token: {token}")
+        logger.info(f"Deleting Redis token: {token}")
 
         r = connect_to_redis()
 
@@ -99,14 +101,14 @@ def delete_from_redis(token):
         result = r.delete(token)
 
         if result == 1:
-            logging.info(f"Redis token deleted: {token}")
+            logger.info(f"Redis token deleted: {token}")
             return True
         else:
-            logging.warning(f"Redis token doesn't exist: {token}")
+            logger.warning(f"Redis token doesn't exist: {token}")
             return False
 
     except Exception as e:
-        logging.error(f"An error occurred during Redis token deletion: {str(e)}")
+        logger.error(f"An error occurred during Redis token deletion: {str(e)}")
         return False
 
 def get_redis_pipeline():
@@ -114,20 +116,20 @@ def get_redis_pipeline():
         r = connect_to_redis()
         if r:
             pipeline = r.pipeline()
-            logging.debug("Successfully created a Redis pipeline.")
+            logger.debug("Successfully created a Redis pipeline.")
             return pipeline
         else:
-            logging.error("Failed to create a Redis pipeline. Redis connection is None.")
+            logger.error("Failed to create a Redis pipeline. Redis connection is None.")
             return None
     except Exception as e:
-        logging.error(f"An error occurred while creating a Redis pipeline: {str(e)}")
+        logger.error(f"An error occurred while creating a Redis pipeline: {str(e)}")
         return None
 
 def execute_pipeline(pipe):
     try:
         pipe.execute()
     except redis.exceptions.RedisError as e:
-        logging.error(f"Failed to execute pipeline: {str(e)}")
+        logger.error(f"Failed to execute pipeline: {str(e)}")
         raise
     return True
 
@@ -135,7 +137,7 @@ def serial_exists(target_serial):
     try:
         r = connect_to_redis()
         if r is None:
-            logging.error("Failed to connect to Redis. Aborting operation.")
+            logger.error("Failed to connect to Redis. Aborting operation.")
             return False
         
         for key in r.scan_iter("*"):  # Replace "*" with a more specific pattern if applicable
@@ -152,13 +154,13 @@ def serial_exists(target_serial):
         return False
 
     except redis.ConnectionError:
-        logging.error("Could not connect to Redis")
+        logger.error("Could not connect to Redis")
         return False
     except redis.TimeoutError:
-        logging.error("Redis operation timed out")
+        logger.error("Redis operation timed out")
         return False
     except Exception as e:
-        logging.error(f"An unknown error occurred while communicating with Redis: {e}")
+        logger.error(f"An unknown error occurred while communicating with Redis: {e}")
         return False
 
 def get_redis_lock(job_id, timeout=60, db=1):
@@ -169,9 +171,9 @@ def get_redis_lock(job_id, timeout=60, db=1):
         lock = Lock(redis_conn, f"lock:{job_id}", timeout=timeout)
         acquired = lock.acquire(blocking=False)
         if acquired:
-            logging.debug(f"Lock acquired for {job_id}")
+            logger.debug(f"Lock acquired for {job_id}")
         else:
-            logging.debug(f"Failed to acquire lock for {job_id}")
+            logger.debug(f"Failed to acquire lock for {job_id}")
     else:
-        logging.error("Failed to connect to Redis. Lock not acquired.")
+        logger.error("Failed to connect to Redis. Lock not acquired.")
     return acquired, lock

@@ -10,6 +10,8 @@ from flask import request
 import re
 import ipaddress
 
+logger = logging.getLogger()
+
 def generate_short_token():
     random_bytes = secrets.token_bytes(15)  # 15 bytes should generate a 20-character token when base64 encoded
     token = base64.urlsafe_b64encode(random_bytes).decode('utf-8')
@@ -23,26 +25,26 @@ def requires_role(required_role):
 
             r = sm.connect_to_redis()
             if token is None:
-                logging.error("Token is missing in the request.")
+                logger.error("Token is missing in the request.")
                 return {"message": "Unauthorized"}, 401
             
             # Checking the type of the Redis key
             key_type = r.type(token).decode('utf-8')
             if key_type != 'hash':
-                logging.error(f"Token is of invalid type: {key_type}. Expected 'hash'.")
+                logger.error(f"Token is of invalid type: {key_type}. Expected 'hash'.")
                 return {"message": "Invalid acces token"}, 400
 
             role_data = r.hget(token, "role")
             if role_data is None:
-                logging.error(f"No role found for token: {token}")
+                logger.error(f"No role found for token: {token}")
                 return {"message": "Unauthorized"}, 401
             
             role = role_data.decode('utf-8')  # Декодирование может быть необходимым
             if role != required_role:
-                logging.warning(f"Permission denied, role doesn't have access: {role} ")
+                logger.warning(f"Permission denied, role doesn't have access: {role} ")
                 return {"message": "Permission denied"}, 403
             
-            logging.info(f"Authorized: role: {role}, token: {token}")
+            logger.info(f"Authorized: role: {role}, token: {token}")
 
             kwargs['admin_token'] = token  # Re-insert the token
             return f(*args, **kwargs)
@@ -86,7 +88,7 @@ def is_valid_id(value):
 
 def validate_field(field_name, field_value, validation_func):
     if not validation_func(field_value):
-        logging.warning(f"Invalid {field_name}: {field_value}")
+        logger.warning(f"Invalid {field_name}: {field_value}")
         return {"message": f"Invalid {field_name}"}, 422
     return None, None
 
