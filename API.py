@@ -9,7 +9,7 @@ from logging.handlers import TimedRotatingFileHandler
 from ipaddress import ip_address, AddressValueError
 from dotenv import load_dotenv
 from device_management import adb_reboot_device, get_adb_device_status, os_boot_status
-from network_management import dispatcher, airplane_toggle_cmd, MODEM_HANDLERS, wait_for_ip, airplane_toggle_coordinates, TETHER_SETTINGS
+from network_management import dispatcher, MODEM_HANDLERS, wait_for_ip, airplane_toggle_coordinates, TETHER_SETTINGS
 from settings import TETHERING_COORDINATES, ALLOWED_PROTOCOLS, ROOT
 import tools as ts
 import storage_management as sm
@@ -199,7 +199,8 @@ class ChangeIP(Resource):
                     return {'error': 'Operation not supported for this device'}, 400
             else:
                 logger.info(f"Airplane on\off via CMD: {tgname}, {device}, id{id}, {username}, {serial}")
-                airplane_toggle_cmd(serial, device)
+                MODEM_HANDLERS[device]['toggle_airplane'](serial)
+                # airplane_toggle_cmd_su(serial, device)
             
             fields_to_update = {'last_ip_change_time': current_time.timestamp()}
             sm.update_data_in_redis(token, fields_to_update)
