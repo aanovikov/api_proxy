@@ -342,6 +342,18 @@ MODEM_HANDLERS = {
         'modem_off': lambda sn: modem_toggle_coordinates_OFF(sn, 'Pixel 2'),
         'modem_status': lambda sn: modem_get_status(sn, 'Pixel 2'),
         'toggle_airplane': lambda sn: airplane_toggle_coordinates(sn, 'Pixel 2')
+    },
+    'msm8916_32_512': {
+        'modem_on': lambda sn: modem_toggle_cmd(sn, 'rndis'),
+        'modem_off': lambda sn: modem_toggle_cmd(sn, 'none'),
+        'modem_status': lambda sn: modem_get_status(sn, 'msm8916_32_512'),
+        'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'msm8916_32_512')
+    },
+    'UFI': {
+        'modem_on': lambda sn: modem_toggle_cmd(sn, 'rndis'),
+        'modem_off': lambda sn: modem_toggle_cmd(sn, 'none'),
+        'modem_status': lambda sn: modem_get_status(sn, 'UFI'),
+        'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'UFI')
     }
 }
 

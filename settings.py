@@ -15,4 +15,4 @@ AIRPLANE_MODE_SETTINGS = {
     'Pixel 2': (940, 860)
 }
 
-ROOT = ['SM-A260G', 'SM-A015F', '5033D_RU', 'J20']
+ROOT = ['SM-A260G', 'SM-A015F', '5033D_RU', 'J20', 'UFI', 'msm8916_32_512']
