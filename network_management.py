@@ -426,6 +426,7 @@ def airplane_toggle_cmd_su(serial, device_model):
 
         # Включаем режим в самолете
         airplane_on_command = adb_base_command + [AIRPLANE_ON_CMD_SU]
+        logger.debug(f'NO SU: {airplane_on_command}')
         logger.info(f"Executing airplane ON: serial: {serial}")
         subprocess.run(airplane_on_command, check=True, timeout=10)
         
