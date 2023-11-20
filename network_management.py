@@ -11,8 +11,10 @@ from settings import TETHERING_COORDINATES, AIRPLANE_MODE_SETTINGS
 
 logger = logging.getLogger()
 
-AIRPLANE_ON_CMD = "su -c 'settings put global airplane_mode_on 1; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true'"
-AIRPLANE_OFF_CMD = "su -c 'settings put global airplane_mode_on 0; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false'"
+AIRPLANE_ON_CMD_SU = "su -c 'settings put global airplane_mode_on 1; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true'"
+AIRPLANE_OFF_CMD_SU = "su -c 'settings put global airplane_mode_on 0; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false'"
+AIRPLANE_ON_CMD = "settings put global airplane_mode_on 1; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true"
+AIRPLANE_OFF_CMD = "settings put global airplane_mode_on 0; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false"
 WIFI_STATUS_CMD = "adb -s {} shell dumpsys wifi | grep 'mNetworkInfo'"
 WAKEUP_DISPLAY = "adb -s {} shell input keyevent 26"
 BACK = "adb -s {} shell input keyevent 4"
@@ -299,19 +301,19 @@ MODEM_HANDLERS = {
         'modem_on': lambda sn: modem_toggle_cmd(sn, 'rndis'),
         'modem_off': lambda sn: modem_toggle_cmd(sn, 'none'),
         'modem_status': lambda sn: modem_get_status(sn, 'SM-A015F'),
-        'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'SM-A015F')
+        'toggle_airplane': lambda sn: airplane_toggle_cmd_su(sn, 'SM-A015F')
     },
     'SM-A260G': {
         'modem_on': lambda sn: modem_toggle_coordinates_ON(sn, 'SM-A260G'),
         'modem_off': lambda sn: modem_toggle_coordinates_OFF(sn, 'SM-A260G'),
         'modem_status': lambda sn: modem_get_status(sn, 'SM-A260G'),
-        'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'SM-A260G')
+        'toggle_airplane': lambda sn: airplane_toggle_cmd_su(sn, 'SM-A260G')
     },
     '5033D_RU': {
         'modem_on': lambda sn: modem_toggle_cmd(sn, 'rndis'),
         'modem_off': lambda sn: modem_toggle_cmd(sn, 'none'),
         'modem_status': lambda sn: modem_get_status(sn, '5033D_RU'),
-        'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, '5033D_RU')
+        'toggle_airplane': lambda sn: airplane_toggle_cmd_su(sn, '5033D_RU')
     },
     'Kingcomm C500': {
         'modem_on': lambda sn: modem_toggle_coordinates_ON(sn, 'Kingcomm C500'),
@@ -323,7 +325,7 @@ MODEM_HANDLERS = {
         'modem_on': lambda sn: modem_toggle_cmd(sn, 'rndis'),
         'modem_off': lambda sn: modem_toggle_cmd(sn, 'none'),
         'modem_status': lambda sn: modem_get_status(sn, 'J20'),
-        'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'J20')
+        'toggle_airplane': lambda sn: airplane_toggle_cmd_su(sn, 'J20')
     },
     'Alpha 5G': {
         'modem_on': lambda sn: modem_toggle_coordinates_ON(sn, 'Alpha 5G'),
@@ -366,7 +368,7 @@ MODEM_HANDLERS = {
 #         child.expect('\$', timeout=10)
 
 #         # Turn airplane mode ON
-#         airplane_on_command = AIRPLANE_ON_CMD
+#         airplane_on_command = AIRPLANE_ON_CMD_SU
 #         logger.info(f"Executing airplane ON: serial: {serial}") #: {airplane_on_command}")
 #         child.sendline(airplane_on_command)
 #         child.expect_exact('Broadcast completed: result=0', timeout=10)
@@ -375,7 +377,7 @@ MODEM_HANDLERS = {
 #         time.sleep(delay)
 
 #         # Turn airplane mode OFF
-#         airplane_off_command = AIRPLANE_OFF_CMD
+#         airplane_off_command = AIRPLANE_OFF_CMD_SU
 #         logger.info(f"Executing airplane OFF: serial: {serial}") # command": {airplane_off_command}")
 #         child.sendline(airplane_off_command)
 #         child.expect_exact('Broadcast completed: result=0', timeout=10)
@@ -404,6 +406,34 @@ def airplane_toggle_cmd(serial, device_model):
 
         # Выключаем режим в самолете
         airplane_off_command = adb_base_command + [AIRPLANE_OFF_CMD]
+        logger.info(f"Executing airplane OFF: serial: {serial}")
+        subprocess.run(airplane_off_command, check=True, timeout=10)
+
+        logger.info(f"Airplane mode toggled: serial {serial}")
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error executing ADB command: {e}")
+        raise
+    except subprocess.TimeoutExpired as e:
+        logger.error("Timeout occurred")
+        raise
+
+def airplane_toggle_cmd_su(serial, device_model):
+    try:
+        delay = 1
+        adb_base_command = ["adb", "-s", serial, "shell"]
+        logger.info(f"Toggling airplane mode: type: {device_model}, {serial}")
+
+        # Включаем режим в самолете
+        airplane_on_command = adb_base_command + [AIRPLANE_ON_CMD_SU]
+        logger.info(f"Executing airplane ON: serial: {serial}")
+        subprocess.run(airplane_on_command, check=True, timeout=10)
+        
+        logger.info(f"Pause for {delay} seconds")
+        time.sleep(delay)
+
+        # Выключаем режим в самолете
+        airplane_off_command = adb_base_command + [AIRPLANE_OFF_CMD_SU]
         logger.info(f"Executing airplane OFF: serial: {serial}")
         subprocess.run(airplane_off_command, check=True, timeout=10)
 
