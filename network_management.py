@@ -357,34 +357,62 @@ MODEM_HANDLERS = {
     }
 }
 
+# def airplane_toggle_cmd(serial, device_model):
+#     try:
+#         delay = 1
+#         logger.info(f"Toggling airplane mode: type: {device_model}, {serial}")
+#         adb_command = f"adb -s {serial} shell"
+#         child = pexpect.spawn(adb_command)
+#         child.expect('\$', timeout=10)
+
+#         # Turn airplane mode ON
+#         airplane_on_command = AIRPLANE_ON_CMD
+#         logger.info(f"Executing airplane ON: serial: {serial}") #: {airplane_on_command}")
+#         child.sendline(airplane_on_command)
+#         child.expect_exact('Broadcast completed: result=0', timeout=10)
+        
+#         logger.info(f"Pause for {delay} seconds")
+#         time.sleep(delay)
+
+#         # Turn airplane mode OFF
+#         airplane_off_command = AIRPLANE_OFF_CMD
+#         logger.info(f"Executing airplane OFF: serial: {serial}") # command": {airplane_off_command}")
+#         child.sendline(airplane_off_command)
+#         child.expect_exact('Broadcast completed: result=0', timeout=10)
+
+#         logger.info(f"Airplane mode toggled: serial {serial}")
+#         child.sendline('exit')
+#         child.close()
+
+#     except pexpect.exceptions.TIMEOUT as e:
+#         logger.error("Timeout occurred")
+#         raise
+
 def airplane_toggle_cmd(serial, device_model):
     try:
         delay = 1
+        adb_base_command = ["adb", "-s", serial, "shell"]
         logger.info(f"Toggling airplane mode: type: {device_model}, {serial}")
-        adb_command = f"adb -s {serial} shell"
-        child = pexpect.spawn(adb_command)
-        child.expect('\$', timeout=10)
 
-        # Turn airplane mode ON
-        airplane_on_command = AIRPLANE_ON_CMD
-        logger.info(f"Executing airplane ON: serial: {serial}") #: {airplane_on_command}")
-        child.sendline(airplane_on_command)
-        child.expect_exact('Broadcast completed: result=0', timeout=10)
+        # Включаем режим в самолете
+        airplane_on_command = adb_base_command + [AIRPLANE_ON_CMD]
+        logger.info(f"Executing airplane ON: serial: {serial}")
+        subprocess.run(airplane_on_command, check=True, timeout=10)
         
         logger.info(f"Pause for {delay} seconds")
         time.sleep(delay)
 
-        # Turn airplane mode OFF
-        airplane_off_command = AIRPLANE_OFF_CMD
-        logger.info(f"Executing airplane OFF: serial: {serial}") # command": {airplane_off_command}")
-        child.sendline(airplane_off_command)
-        child.expect_exact('Broadcast completed: result=0', timeout=10)
+        # Выключаем режим в самолете
+        airplane_off_command = adb_base_command + [AIRPLANE_OFF_CMD]
+        logger.info(f"Executing airplane OFF: serial: {serial}")
+        subprocess.run(airplane_off_command, check=True, timeout=10)
 
         logger.info(f"Airplane mode toggled: serial {serial}")
-        child.sendline('exit')
-        child.close()
 
-    except pexpect.exceptions.TIMEOUT as e:
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error executing ADB command: {e}")
+        raise
+    except subprocess.TimeoutExpired as e:
         logger.error("Timeout occurred")
         raise
 
