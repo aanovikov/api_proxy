@@ -193,21 +193,24 @@ class ChangeIP(Resource):
             if device not in ROOT:
                 logger.info(f"Airplane on\off via TOUCH: {tgname}, {device}, id{id}, {username}, {serial}")
                 if 'toggle_airplane' in MODEM_HANDLERS[device]:
-                    MODEM_HANDLERS[device]['toggle_airplane'](serial)
+                    airplane_toggle_result = MODEM_HANDLERS[device]['toggle_airplane'](serial)
                 else:
                     logger.error(f"No 'toggle_airplane' for device {device}.")
                     return {'error': 'Operation not supported for this device'}, 400
             else:
                 logger.info(f"Airplane on\off via CMD: {tgname}, {device}, id{id}, {username}, {serial}")
-                MODEM_HANDLERS[device]['toggle_airplane'](serial)
+                airplane_toggle_result = MODEM_HANDLERS[device]['toggle_airplane'](serial)
                 # airplane_toggle_cmd_su(serial, device)
             
-            fields_to_update = {'last_ip_change_time': current_time.timestamp()}
-            sm.update_data_in_redis(token, fields_to_update)
-            logger.debug(f"Updated data for token: {token} with the following fields: {fields_to_update}")
-
-            logger.info(f"IP CHANGED: {tgname}, {device}, id{id}, {username}, {serial}")
-            return {'status': 'success', 'message': 'IP was changed'}, 200
+            if airplane_toggle_result:
+                fields_to_update = {'last_ip_change_time': current_time.timestamp()}
+                sm.update_data_in_redis(token, fields_to_update)
+                logger.debug(f"Updated data for token: {token} with the following fields: {fields_to_update}")
+                logger.info(f"IP CHANGED: {tgname}, {device}, id{id}, {username}, {serial}")
+                return {'status': 'success', 'message': 'IP was changed'}, 200
+            else:
+                logger.error(f"Failed to change IP: {tgname}, {device}, id{id}, {username}, {serial}")
+                return {'status': 'failure', 'message': 'Failed to change IP'}, 400
 
         except Exception as e:
             logger.error(f"An error occurred: {e}")

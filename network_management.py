@@ -359,36 +359,24 @@ MODEM_HANDLERS = {
     }
 }
 
-# def airplane_toggle_cmd(serial, device_model):
-#     try:
-#         delay = 1
-#         logger.info(f"Toggling airplane mode: type: {device_model}, {serial}")
-#         adb_command = f"adb -s {serial} shell"
-#         child = pexpect.spawn(adb_command)
-#         child.expect('\$', timeout=10)
+def check_airplane(serial):
+    try:
+        status_airplane = AIRPLANE_STATUS.format(serial)
+        result = subprocess.run(status_airplane, shell=True, capture_output=True, text=True, timeout=10)
+        if '1' in result.stdout:
+            return 1
+        elif '0' in result.stdout:
+            return 0
+        else: 
+            raise ValueError("unknown status")
 
-#         # Turn airplane mode ON
-#         airplane_on_command = AIRPLANE_ON_CMD_SU
-#         logger.info(f"Executing airplane ON: serial: {serial}") #: {airplane_on_command}")
-#         child.sendline(airplane_on_command)
-#         child.expect_exact('Broadcast completed: result=0', timeout=10)
-        
-#         logger.info(f"Pause for {delay} seconds")
-#         time.sleep(delay)
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error executing ADB command: {e}")
+        raise
 
-#         # Turn airplane mode OFF
-#         airplane_off_command = AIRPLANE_OFF_CMD_SU
-#         logger.info(f"Executing airplane OFF: serial: {serial}") # command": {airplane_off_command}")
-#         child.sendline(airplane_off_command)
-#         child.expect_exact('Broadcast completed: result=0', timeout=10)
-
-#         logger.info(f"Airplane mode toggled: serial {serial}")
-#         child.sendline('exit')
-#         child.close()
-
-#     except pexpect.exceptions.TIMEOUT as e:
-#         logger.error("Timeout occurred")
-#         raise
+    except subprocess.TimeoutExpired as e:
+        logger.error("Timeout occurred")
+        raise
 
 def airplane_toggle_cmd(serial, device_model):
     try:
@@ -404,19 +392,30 @@ def airplane_toggle_cmd(serial, device_model):
         logger.info(f"Pause for {delay} seconds")
         time.sleep(delay)
 
+        if check_airplane(serial) == 1:
+            logger.debug(f"AIRPLANE ON")
+        else:
+            raise RuntimeError("Failed to turn ON airplane mode")
+
         # Выключаем режим в самолете
         airplane_off_command = adb_base_command + [AIRPLANE_OFF_CMD]
         logger.info(f"Executing airplane OFF: serial: {serial}")
         subprocess.run(airplane_off_command, check=True, timeout=10)
+        
+        if check_airplane(serial) == 0:
+            logger.debug(f"AIRPLANE OFF")
+        else:
+            raise RuntimeError("Failed to turn OFF airplane mode")
 
         logger.info(f"Airplane mode toggled: serial {serial}")
+        return True
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Error executing ADB command: {e}")
-        raise
+        return False
     except subprocess.TimeoutExpired as e:
         logger.error("Timeout occurred")
-        raise
+        return False
 
 def airplane_toggle_cmd_su(serial, device_model):
     try:
@@ -433,19 +432,30 @@ def airplane_toggle_cmd_su(serial, device_model):
         logger.info(f"Pause for {delay} seconds")
         time.sleep(delay)
 
+        if check_airplane(serial) == 1:
+            logger.debug(f"AIRPLANE ON")
+        else:
+            raise RuntimeError("Failed to turn ON airplane mode")
+
         # Выключаем режим в самолете
         airplane_off_command = adb_base_command + [AIRPLANE_OFF_CMD_SU]
         logger.info(f"Executing airplane OFF: serial: {serial}")
         subprocess.run(airplane_off_command, check=True, timeout=10)
 
+        if check_airplane(serial) == 0:
+            logger.debug(f"AIRPLANE OFF")
+        else:
+            raise RuntimeError("Failed to turn OFF airplane mode")
+
         logger.info(f"Airplane mode toggled: serial {serial}")
+        return True
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Error executing ADB command: {e}")
-        raise
+        return False
     except subprocess.TimeoutExpired as e:
         logger.error("Timeout occurred")
-        raise
+        return False
 
 def airplane_toggle_coordinates(serial, device_model):
     try:
