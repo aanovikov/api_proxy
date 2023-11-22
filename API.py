@@ -65,6 +65,12 @@ def reboot_info_to_redis(tgname, id, serial, expire=EXPIRY_TIME, db=REBOOT_RDB):
         logger.error(f"An unknown error occurred while communicating with Redis: {e}")
         return False
 
+def check_job_exists(scheduler, job_id):
+                for job in scheduler.get_jobs():
+                    if job.id == job_id:
+                        return True  # Job found
+                return False  # Job not found
+
 class Reboot(Resource):
     #@ts.requires_role("user")
     def get(self, token):
@@ -236,11 +242,11 @@ class AutoChangeIP(Resource):
             args = parser.parse_args()
             interval_seconds = int(args['interval_seconds'])
 
-            def check_job_exists(scheduler, job_id):
-                for job in scheduler.get_jobs():
-                    if job.id == job_id:
-                        return True  # Job found
-                return False  # Job not found
+            # def check_job_exists(scheduler, job_id):
+            #     for job in scheduler.get_jobs():
+            #         if job.id == job_id:
+            #             return True  # Job found
+            #     return False  # Job not found
 
             # Obtain a lock to prevent concurrent modifications by other schedulers or workers
             with scheduler.connection.lock(job_id):
@@ -320,6 +326,7 @@ class DeleteUser(Resource):
             device = user_data.get('device')
             username = user_data.get('username')
             tgname = user_data.get('tgname')
+            job_id = f"changeip_{serial}"  # Определение job_id
             
             logger.debug(f"DATA: {token}, {serial}, {proxy_id}, {device}, {username}")
             
@@ -371,24 +378,31 @@ class DeleteUser(Resource):
                 logger.error(f"Token not found in Redis or failed to remove: {token}")
                 return ({f"message": f"Token not found in Redis or failed to remove: {token}"}, 404)
 
-            if user_data.get('mode') == 'modem':
-                serial = user_data.get('serial')  # Предполагая, что serial хранится в user_data
-                device = user_data.get('device')
-                device_id = user_data.get('id')
-
-                status_handler = MODEM_HANDLERS.get(device, {}).get('modem_status')
-                status = status_handler(serial) if status_handler else None
-
-                if status == "device_not_found":
-                    logger.error(f"Device not found, possibly it has lost connection: id{device_id}, serial: {serial}")
-                elif status == "timeout":
-                    logger.error(f"Device timed out, possibly it has lost connection: id{device_id}, serial: {serial}")
-                elif status == "rndis":
-                    logger.debug(f'Device in RNDIS')
-                    MODEM_HANDLERS[device]['modem_off'](serial)
-                    logger.info(f"RNDIS OFF: id{device_id}, serial: {serial}")
+            with scheduler.connection.lock(job_id, timeout=10):  # Получение блокировки
+                if check_job_exists(scheduler, job_id):
+                    scheduler.cancel(job_id)  # Отмена задания, если оно существует
+                    logger.info(f"Job {job_id} canceled.")
                 else:
-                    logger.warning(f"NOT in RNDIS: {status}: id{device_id}, serial: {serial}")
+                    logger.warning(f"Job {job_id} not found, cannot cancel.")
+
+            # if user_data.get('mode') == 'modem':
+            #     serial = user_data.get('serial')  # Предполагая, что serial хранится в user_data
+            #     device = user_data.get('device')
+            #     device_id = user_data.get('id')
+
+            #     status_handler = MODEM_HANDLERS.get(device, {}).get('modem_status')
+            #     status = status_handler(serial) if status_handler else None
+
+            #     if status == "device_not_found":
+            #         logger.error(f"Device not found, possibly it has lost connection: id{device_id}, serial: {serial}")
+            #     elif status == "timeout":
+            #         logger.error(f"Device timed out, possibly it has lost connection: id{device_id}, serial: {serial}")
+            #     elif status == "rndis":
+            #         logger.debug(f'Device in RNDIS')
+            #         MODEM_HANDLERS[device]['modem_off'](serial)
+            #         logger.info(f"RNDIS OFF: id{device_id}, serial: {serial}")
+            #     else:
+            #         logger.warning(f"NOT in RNDIS: {status}: id{device_id}, serial: {serial}")
 
             logger.info(f"User deleted: {username}")
             return ({f"message": f"User deleted: {username}"}, 200)
