@@ -343,7 +343,9 @@ MODEM_HANDLERS = {
         'modem_on': lambda sn: modem_toggle_coordinates_ON(sn, 'Pixel 2'),
         'modem_off': lambda sn: modem_toggle_coordinates_OFF(sn, 'Pixel 2'),
         'modem_status': lambda sn: modem_get_status(sn, 'Pixel 2'),
-        'toggle_airplane': lambda sn: airplane_toggle_coordinates(sn, 'Pixel 2')
+        'toggle_airplane': lambda sn: airplane_toggle_coordinates(sn, 'Pixel 2'),
+        'enable_airplane_mode': lambda sn: enable_airplane_mode(sn, 'Pixel 2'),
+        'disable_airplane_mode': lambda sn: disable_airplane_mode(sn, 'Pixel 2')
     },
     'msm8916_32_512': {
         'modem_on': lambda sn: modem_toggle_cmd(sn, 'rndis'),
@@ -553,8 +555,178 @@ def airplane_toggle_coordinates(serial, device_model):
             return False
         logger.debug(f'GO HOME: {serial}, type: {device_model}')
         subprocess.run(go_back, shell=True)
+        subprocess.run(go_back, shell=True)
         return True
         
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Command failed with error: {e}, serial: {serial}")
+        return False
+    except Exception as e:
+        logger.error(f"An unexpected error occurred: {e}, serial: {serial}")
+        return False
+
+def get_airplane_mode_coordinates(serial, device_model):
+    if AIRPLANE_MODE_SETTINGS is None:
+        logger.error(f"AIRPLANE_MODE_SETTINGS is not defined, serial: {serial}, type: {device_model}")
+        return None
+    if device_model not in AIRPLANE_MODE_SETTINGS:
+        logger.error(f"Invalid device: type: {device_model}, {serial}")
+        return None
+    coordinates = AIRPLANE_MODE_SETTINGS.get(device_model)
+    if coordinates is None:
+        logger.error(f"No coordinates found for serial: {serial}")
+        return None
+    return coordinates
+
+def enable_airplane_mode(serial, device_model):
+    try:
+        coordinates = get_airplane_mode_coordinates(serial, device_model)
+        if coordinates is None:
+            logger.error(f'No coordinates found for serial: {serial}, model: {device_model}')
+            return f'No coordinates found for serial: {serial}, model: {device_model}'
+        x, y = coordinates
+
+        wakeup_command = WAKEUP_DISPLAY.format(serial)
+        go_back = BACK.format(serial)
+        status_display = DISPLAY_STATUS.format(serial)
+        open_settings_command = AIRPLANE_MODE_WINDOW.format(serial)
+        active_window_command = ACTIVE_WINDOW.format(serial)
+        screen_input_command = SCREEN_INPUT.format(serial, x, y)
+        status_airplane = AIRPLANE_STATUS.format(serial)
+
+        result = subprocess.run(status_display, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        is_display_on = 'state=ON' in result.stdout.decode()
+
+        logger.info(f'AIRPLANE switching is started: {serial}, type: {device_model}')
+
+        if not is_display_on:
+            for _ in range(3): # Wake up display and check its status
+                logger.debug(f'Waking display UP: serial: {serial}, type: {device_model}')
+                subprocess.run(wakeup_command, shell=True)  # Wake up the device
+                time.sleep(1)
+                start_time = time.time()
+                # Check display status within a 5-second time limit
+                logger.debug(f'Checking display STATE: serial: {serial}, type: {device_model}')
+                while time.time() - start_time <= 3:
+                    result = subprocess.run(status_display, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    if 'state=ON' in result.stdout.decode():
+                        break
+                else:
+                    continue  # Restart the loop to try again
+                break  # Exit the loop if we successfully activated the display
+            else:
+                logger.error(f"Display did not turn on after 3 attempts, serial: {serial}")
+                return False
+        else:
+            logger.info("Display is already ON, skipping the wake-up cycle.")
+
+        logger.debug(f'Opening Airplane settings: serial: {serial}, type: {device_model}')
+        subprocess.run(open_settings_command, shell=True)
+        logger.debug(f'Opened Airplane settings and wait 2 sec: {serial}, type: {device_model}')
+        time.sleep(2)
+
+        for _ in range(3):  # tap on coordinates to switch airplane mode ON and check status
+            logger.debug(f'Tapping on coordinates 1: serial: {serial}, type: {device_model}')
+            subprocess.run(screen_input_command, shell=True)
+            time.sleep(1)
+            start_time = time.time()
+            logger.debug(f'Checking AIRPLANE status: serial: {serial}, type: {device_model}')
+            while time.time() - start_time <= 3:
+                result = subprocess.run(status_airplane, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                if '1' in result.stdout.decode():
+                    logger.info(f"AIRPLANE ON")
+                    break
+            else:
+                # Если режим самолета не включился, то переходим к следующей итерации цикла for
+                continue  # Это continue здесь действительно необходимо, чтобы продолжить следующую итерацию цикла for
+            # Если режим самолета включился, прерываем цикл for
+            break
+        else:
+            # Этот блок else относится к циклу for и выполнится только если цикл for не был прерван
+            logger.error(f"Airplane mode did not activate after 3 attempts, serial: {serial}")
+            return False
+
+        logger.debug(f'GO HOME: {serial}, type: {device_model}')
+        subprocess.run(go_back, shell=True)
+        subprocess.run(go_back, shell=True)
+        return True
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Command failed with error: {e}, serial: {serial}")
+        return False
+    except Exception as e:
+        logger.error(f"An unexpected error occurred: {e}, serial: {serial}")
+        return False
+
+def disable_airplane_mode(serial, device_model):
+    try:
+        coordinates = get_airplane_mode_coordinates(serial, device_model)
+        if coordinates is None:
+            logger.error(f'No coordinates found for serial: {serial}, model: {device_model}')
+            return f'No coordinates found for serial: {serial}, model: {device_model}'
+        x, y = coordinates
+
+        wakeup_command = WAKEUP_DISPLAY.format(serial)
+        go_back = BACK.format(serial)
+        status_display = DISPLAY_STATUS.format(serial)
+        open_settings_command = AIRPLANE_MODE_WINDOW.format(serial)
+        active_window_command = ACTIVE_WINDOW.format(serial)
+        screen_input_command = SCREEN_INPUT.format(serial, x, y)
+        status_airplane = AIRPLANE_STATUS.format(serial)
+
+        result = subprocess.run(status_display, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        is_display_on = 'state=ON' in result.stdout.decode()
+
+        logger.info(f'AIRPLANE switching is started: {serial}, type: {device_model}')
+
+        if not is_display_on:
+            for _ in range(3): # Wake up display and check its status
+                logger.debug(f'Waking display UP: serial: {serial}, type: {device_model}')
+                subprocess.run(wakeup_command, shell=True)  # Wake up the device
+                time.sleep(1)
+                start_time = time.time()
+                # Check display status within a 5-second time limit
+                logger.debug(f'Checking display STATE: serial: {serial}, type: {device_model}')
+                while time.time() - start_time <= 3:
+                    result = subprocess.run(status_display, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    if 'state=ON' in result.stdout.decode():
+                        break
+                else:
+                    continue  # Restart the loop to try again
+                break  # Exit the loop if we successfully activated the display
+            else:
+                logger.error(f"Display did not turn on after 3 attempts, serial: {serial}")
+                return False
+        else:
+            logger.info("Display is already ON, skipping the wake-up cycle.")
+
+        logger.debug(f'Opening Airplane settings: serial: {serial}, type: {device_model}')
+        subprocess.run(open_settings_command, shell=True)
+        logger.debug(f'Opened Airplane settings and wait 2 sec: {serial}, type: {device_model}')
+        time.sleep(2)
+
+        for _ in range(3): # tap on coordinates to switch airplane mode OFF and check status
+            logger.debug(f'Tapping on coordinates 2: serial: {serial}, type: {device_model}')
+            subprocess.run(screen_input_command, shell=True)
+            time.sleep(1)
+            start_time = time.time()
+            while time.time() - start_time <= 3:
+                result = subprocess.run(status_airplane, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                if '0' in result.stdout.decode():
+                    logger.info(f"AIRPLANE OFF")
+                    break
+            else:
+                continue
+            break
+        else:
+            logger.error(f"Airplane mode did not DE-activate after 3 attempts, serial: {serial}")
+            return False
+            
+        logger.debug(f'GO HOME: {serial}, type: {device_model}')
+        subprocess.run(go_back, shell=True)
+        subprocess.run(go_back, shell=True)
+        return True
+
     except subprocess.CalledProcessError as e:
         logger.error(f"Command failed with error: {e}, serial: {serial}")
         return False

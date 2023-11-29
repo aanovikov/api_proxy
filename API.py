@@ -9,7 +9,7 @@ from logging.handlers import TimedRotatingFileHandler
 from ipaddress import ip_address, AddressValueError
 from dotenv import load_dotenv
 from device_management import adb_reboot_device, get_adb_device_status, os_boot_status
-from network_management import dispatcher, MODEM_HANDLERS, wait_for_ip, airplane_toggle_coordinates, TETHER_SETTINGS
+from network_management import dispatcher, MODEM_HANDLERS, wait_for_ip, airplane_toggle_coordinates, TETHER_SETTINGS, check_airplane
 from settings import TETHERING_COORDINATES, ALLOWED_PROTOCOLS, ROOT
 import tools as ts
 import storage_management as sm
@@ -75,7 +75,7 @@ class Reboot(Resource):
     #@ts.requires_role("user")
     def get(self, token):
         try:
-            logger.info("Received request: REBOOT")
+            logger.info("REBOOT")
 
             user_data = sm.get_data_from_redis(token)
             serial = user_data.get('serial')
@@ -225,7 +225,7 @@ class ChangeIP(Resource):
 class AutoChangeIP(Resource):
     def post(self, token):
         try:
-            logger.info("Received request: SET IP AUTO CHANGE")
+            logger.info("SET IP AUTO CHANGE")
 
             user_data = sm.get_data_from_redis(token)
             logger.debug(f"GOT data from redis, token {token}")
@@ -306,7 +306,7 @@ class DeleteUser(Resource):
     @ts.requires_role("admin")
     def delete(self, admin_token):
         try:
-            logger.info("Received request: DELETE USER.")
+            logger.info("DELETE USER.")
 
             data = request.json
             logger.info(f"Got data: {data}")
@@ -419,7 +419,7 @@ class UpdateAuth(Resource):
     @ts.requires_role("admin")
     def patch(self, admin_token):
         try:
-            logger.info("Received request: UPDATE AUTH.")
+            logger.info("UPDATE AUTH.")
 
             data = request.json
             if data is None:
@@ -515,7 +515,7 @@ class UpdateMode(Resource):
     @ts.requires_role("admin")
     def post(self, admin_token):
         try:
-            logger.info("Received request: UPDATE MODE.")
+            logger.info("UPDATE MODE.")
 
             data = request.json
             if data is None:
@@ -564,7 +564,7 @@ class AddUserModem(Resource):
     @ts.requires_role("admin")
     def post(self, admin_token):
         try:
-            logger.info("Received request: ADD USER MODEM.")
+            logger.info("ADD USER MODEM.")
             
             data = request.json
             if data is None:
@@ -685,7 +685,7 @@ class AddUserAndroid(Resource):
     @ts.requires_role("admin")
     def post(self, admin_token):
         try:
-            logger.info("Received request: ADD USER ANDROID.")
+            logger.info("ADD USER ANDROID.")
             
             data = request.json
             if data is None:
@@ -795,7 +795,7 @@ class UpdateUser(Resource):
     @ts.requires_role("admin")
     def patch(self, admin_token):
         try:
-            logger.info("Received request: UPDATE LOGOPASS.")
+            logger.info("UPDATE LOGOPASS.")
             
             data = request.json
             if data is None:
@@ -871,7 +871,7 @@ class ReplaceAndroid(Resource):
             return {"message": "Internal server error"}, 500
 
         try:
-            logger.info("Received request: REPLACE ANDROID")
+            logger.info("REPLACE ANDROID")
 
             required_fields = ['token', 'new_id', 'new_serial', 'new_device', 'new_parent_ip']
             
@@ -938,7 +938,7 @@ class ReplaceModem(Resource):
             return {"message": "Internal server error"}, 500
 
         try:
-            logger.info("Received request: REPLACE MODEM")
+            logger.info("REPLACE MODEM")
 
             required_fields = ['token', 'new_id', 'new_serial', 'new_device']
             
@@ -995,7 +995,7 @@ class ProxyCount(Resource):
         cursor = None
 
         try:
-            logger.info("Received request: GET PROXY COUNT.")
+            logger.info("GET PROXY COUNT.")
 
             logger.info("Attempting to connect to MySQL...")
             connection = sm.connect_to_mysql()
@@ -1034,7 +1034,7 @@ class ModemStatus(Resource):
     @ts.requires_role("admin")
     def post(self, admin_token):
         try:
-            logger.info("Received request to CHECK MODEM STATUS.")
+            logger.info("CHECK MODEM STATUS.")
 
             data = request.json
             if data is None:
@@ -1076,7 +1076,7 @@ class ModemUp(Resource):
     @ts.requires_role("admin")
     def post(self, admin_token):
         try:
-            logger.info("Received request to SWITCH MODEM.")
+            logger.info("SWITCH MODEM.")
 
             data = request.json
             if data is None:
@@ -1141,6 +1141,134 @@ class ModemUp(Resource):
             logger.error(f"An error occurred: {str(e)}")
             return {"message": "Internal server error"}, 500
 
+class AirplaneStatus(Resource):
+    @ts.requires_role("admin")
+    def post(self, admin_token):
+        try:
+            logger.info("CHECK AIRPLANE STATUS.")
+
+            data = request.json
+            if data is None:
+                return {"message": "Invalid request: JSON body required"}, 400
+            
+            token = data.get('token')
+
+            user_data = sm.get_data_from_redis(token)
+            serial_number = user_data.get('serial')
+            device_model = user_data.get('device')
+            mode = user_data.get('mode')
+            id = user_data.get('id')
+            
+            if not serial_number:
+                logger.error(f"Serial number not found, id{id}")
+                return {'error': 'Serial number not found'}, 400
+
+            status = check_airplane(serial_number)
+
+            if status == 1:
+                logger.info(f"id{id}: Airplane is ON")
+                return {"message": "Airplane is ON"}, 200
+            elif status == 0:
+                logger.info(f"id{id}: Airplane is OFF")
+                return {"message": "Airplane is OFF"}, 200
+            else:
+                logger.error(f'id{id}: Error or unknown status')
+                return {'error': 'Error or unknown status'}, 500
+
+        except Exception as e:
+            logger.error(f"id{id}: An error occurred: {str(e)}")
+            return {"error": f"An error occurred: {str(e)}"}, 500
+
+class AirplaneOn(Resource):
+    @ts.requires_role("admin")
+    def post(self, admin_token):
+        try:
+            data = request.json
+            if data is None:
+                return {"message": "Invalid request: JSON body required"}, 400
+            
+            token = data.get('token')
+
+            user_data = sm.get_data_from_redis(token)
+            serial = user_data.get('serial')
+            device = user_data.get('device')
+            id = user_data.get('id')
+
+            logger.info(f"AIRPLANE ON: id{id}({serial}), {device}")
+
+            if not serial:
+                logger.error(f"Serial NOT found in redis: id{id}({serial}), {device}")
+                return {'error': 'Serial not found'}, 400
+                
+            # Check if device has ROOT
+            if device not in ROOT:
+                logger.info(f"Airplane ON via TOUCH: id{id}({serial}), {device}")
+                if 'enable_airplane_mode' in MODEM_HANDLERS[device]:
+                    airplane_on_result = MODEM_HANDLERS[device]['enable_airplane_mode'](serial)
+                else:
+                    logger.error(f"No 'enable_airplane_mode': id{id}({serial}), {device}")
+                    return {'error': 'Operation not supported for this device'}, 400
+            else:
+                logger.info(f"Airplane ON via CMD: id{id}({serial}), {device}")
+                airplane_on_result = MODEM_HANDLERS[device]['enable_airplane_mode'](serial)
+                # airplane_toggle_cmd_su(serial, device)
+            
+            if airplane_on_result:
+                logger.info(f"Airplane turned ON: id{id}({serial}), {device}")
+                return {'status': 'success', 'message': 'Airplane switched ON'}, 200
+            else:
+                logger.error(f"Failed to turn ON airplane: id{id}({serial}), {device}")
+                return {'status': 'failure', 'message': 'Failed to turn ON airplane'}, 400
+
+        except Exception as e:
+            logger.error(f"An error occurred: {e}")
+            return {'status': 'failure', 'message': 'An error occurred while turn ON airplane'}, 500
+
+class AirplaneOff(Resource):
+    @ts.requires_role("admin")
+    def post(self, admin_token):
+        try:
+            data = request.json
+            if data is None:
+                return {"message": "Invalid request: JSON body required"}, 400
+            
+            token = data.get('token')
+
+            user_data = sm.get_data_from_redis(token)
+            serial = user_data.get('serial')
+            device = user_data.get('device')
+            id = user_data.get('id')
+
+            logger.info(f"AIRPLANE OFF: id{id}({serial}), {device}")
+
+            if not serial:
+                logger.error(f"Serial NOT found in redis: id{id}({serial}), {device}")
+                return {'error': 'Serial not found'}, 400
+                
+            # Check if device has ROOT
+            if device not in ROOT:
+                logger.info(f"Airplane OFF via TOUCH: id{id}({serial}), {device}")
+                if 'disable_airplane_mode' in MODEM_HANDLERS[device]:
+                    airplane_off_result = MODEM_HANDLERS[device]['disable_airplane_mode'](serial)
+                else:
+                    logger.error(f"No 'disable_airplane_mode': id{id}({serial}), {device}")
+                    return {'error': 'Operation not supported for this device'}, 400
+            else:
+                logger.info(f"Airplane OFF via CMD: id{id}({serial}), {device}")
+                airplane_off_result = MODEM_HANDLERS[device]['disable_airplane_mode'](serial)
+                # airplane_toggle_cmd_su(serial, device)
+            
+            if airplane_off_result:
+                logger.info(f"Airplane turned OFF: id{id}({serial}), {device}")
+                return {'status': 'success', 'message': 'Airplane switched OFF'}, 200
+            else:
+                logger.error(f"Failed to turn OFF airplane: id{id}({serial}), {device}")
+                return {'status': 'failure', 'message': 'Failed to turn OFF airplane'}, 400
+
+        except Exception as e:
+            logger.error(f"An error occurred: {e}")
+            return {'status': 'failure', 'message': 'An error occurred while turn OFF airplane'}, 500
+
 #resources
 api.add_resource(Reboot, '/api/reboot/<string:token>') #user role
 api.add_resource(DeviceStatus, '/api/device_status/<string:token>') #user role
@@ -1158,6 +1286,9 @@ api.add_resource(ReplaceModem, '/api/replace_modem/<string:token>')
 api.add_resource(ModemUp, '/api/modemup/<string:token>') #admin role
 api.add_resource(ModemStatus, '/api/modemstatus/<string:token>') #admin role
 api.add_resource(ProxyCount, '/api/proxycount/<string:token>') #admin role
+api.add_resource(AirplaneStatus, '/api/airplanestatus/<string:token>') #admin role
+api.add_resource(AirplaneOn, '/api/airplane_on/<string:token>') #admin role
+api.add_resource(AirplaneOff, '/api/airplane_off/<string:token>') #admin role
 
 if __name__ == '__main__':
     app.run(debug=True)
