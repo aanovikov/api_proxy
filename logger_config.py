@@ -11,7 +11,8 @@ def setup_logger():
         backupCount=7
     )
     formatter = logging.Formatter(
-        '[%(asctime)s] [PID:%(process)d] [%(levelname)s] - %(message)s',
+        # '[%(asctime)s] [PID:%(process)d] [%(levelname)s] - %(message)s',
+        '[%(asctime)s] [%(levelname)s] - %(message)s',
         '%Y-%m-%d %H:%M:%S'
     )
     handler.setFormatter(formatter)

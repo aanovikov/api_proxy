@@ -197,7 +197,7 @@ class ChangeIP(Resource):
                 # Проверяем, прошло ли 30 секунд с последней смены IP
                 if time_passed < timedelta(seconds=CHANGE_IP_TIMEOUT):
                     time_left = CHANGE_IP_TIMEOUT - int(time_passed.total_seconds())
-                    logger.warning(f"IP CHANGE LIMIT REACHED: time left: {time_left} sec., {tgname}, {http_port}, {socks_port}, id{id}, {username}, {serial}")
+                    logger.warning(f"IP CHANGE LIMIT REACHED: {user_log_credentials}, time left: {time_left} sec.")
                     return {'error': f'You can only change IP once every {CHANGE_IP_TIMEOUT} seconds. Try again in {time_left} seconds.'}, 429
                 user_data['last_ip_change_time'] = current_time.timestamp()
                 
