@@ -1,9 +1,11 @@
 import logging
 from logging.handlers import TimedRotatingFileHandler
 
+LOG_PATH = '/var/log/supervisor/API.log'
+
 def setup_logger():
     handler = TimedRotatingFileHandler(
-        '/var/log/supervisor/API.log',
+        LOG_PATH,
         when='midnight',
         interval=1,
         backupCount=7
@@ -15,5 +17,5 @@ def setup_logger():
     handler.setFormatter(formatter)
 
     logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
     logger.addHandler(handler)

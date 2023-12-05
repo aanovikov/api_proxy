@@ -39,6 +39,9 @@ REBOOT_RDB = 2
 EXPIRY_TIME = 60
 SCHEDULER_RDB = os.getenv('SCHEDULER_RDB')
 
+# templates for log
+USER_LOG_CREDENTIALS = '{tgname}, id{id}({serial})'
+
 redis_conn = sm.connect_to_redis(db=SCHEDULER_RDB)
 scheduler = Scheduler(connection=redis_conn, interval=30)
 logger.debug(redis_conn)
@@ -52,7 +55,7 @@ def reboot_info_to_redis(tgname, id, serial, expire=EXPIRY_TIME, db=REBOOT_RDB):
 
         r.setex(serial, expire, '')
 
-        logger.info(f"Stored reboot info: user {tgname}, id{id}, {serial}")
+        logger.debug(f"Stored reboot info: user {tgname}, id{id}, {serial}")
         return True
         
     except redis.ConnectionError:
@@ -75,7 +78,7 @@ class Reboot(Resource):
     #@ts.requires_role("user")
     def get(self, token):
         try:
-            logger.info("REBOOT")
+            logger.debug("REBOOT")
 
             user_data = sm.get_data_from_redis(token)
             serial = user_data.get('serial')
@@ -97,13 +100,13 @@ class Reboot(Resource):
                 return {'reboot': 'in progress', 'message': 'Device is still rebooting.'}, 409
 
             if mode == "android":
-                logger.info(f'Rebooting: user: {tgname}, id{device_id}, {serial}')
+                logger.info(f'REBOOT: tguser {tgname}, id{device_id}, {serial}')
                 adb_reboot_device(serial, device_id)
                 reboot_info_to_redis(tgname, device_id, serial)
                 return {'reboot': 'OK', 'message': 'Reboot is started.'}, 202
 
             if mode == "modem":
-                logger.info(f'Rebooting: user: {tgname}, id{device_id}, {serial}')
+                logger.info(f'REBOOT: tguser {tgname}, id{device_id}, {serial}')
                 adb_reboot_device(serial, device_id)
                 reboot_info_to_redis(tgname, device_id, serial)
                 # logger.debug(f'Scheduling: id{device_id}, task: {job_id}')
@@ -122,11 +125,13 @@ class DeviceStatus(Resource):
     #@ts.requires_role("user")
     def get(self, token, serial=None):
         try:
+            logger.debug("STATUS")
+
             serial = request.args.get('serial')  # Get serial from query params
 
             if serial:
                 # For admin: serial directly provided
-                logger.info(f"Admin checking status: serial: {serial}")
+                logger.info(f"STATUS (admin only): serial {serial}")
                 device_id = None
                 device = None
             else:
@@ -134,7 +139,8 @@ class DeviceStatus(Resource):
                 serial = user_data.get('serial')
                 device = user_data.get('device')
                 device_id = user_data.get('id')
-                logger.info(f"User checking status: id{device_id}, serial: {serial}")
+                tgname = user_data.get('tgname')
+                logger.info(f"STATUS: {tgname}, id{device_id}({serial})")
 
             if not serial:
                 logger.error(f"Serial not found in user data: {serial}.")
@@ -174,7 +180,7 @@ class ChangeIP(Resource):
             last_ip_change_time = user_data.get('last_ip_change_time')
             current_time = datetime.now()
 
-            logger.info(f"IP CHANGE REQUEST: {tgname}, {http_port}, {socks_port}, id{id}, {username}, {serial}")
+            logger.info(f"IP CHANGE: {tgname}, {username}, id{id}({serial})")
 
             if not serial:
                 logger.error(f"Serial NOT found in redis: id{id}, user {username}, serial: {serial}")
@@ -197,14 +203,14 @@ class ChangeIP(Resource):
                 
             # Check if device has ROOT
             if device not in ROOT:
-                logger.info(f"Airplane on\off via TOUCH: {tgname}, {device}, id{id}, {username}, {serial}")
+                logger.debug(f"Airplane on\off via TOUCH: {tgname}, {device}, id{id}, {username}, {serial}")
                 if 'toggle_airplane' in MODEM_HANDLERS[device]:
                     airplane_toggle_result = MODEM_HANDLERS[device]['toggle_airplane'](serial)
                 else:
                     logger.error(f"No 'toggle_airplane' for device {device}.")
                     return {'error': 'Operation not supported for this device'}, 400
             else:
-                logger.info(f"Airplane on\off via CMD: {tgname}, {device}, id{id}, {username}, {serial}")
+                logger.debug(f"Airplane on\off via CMD: {tgname}, {device}, id{id}, {username}, {serial}")
                 airplane_toggle_result = MODEM_HANDLERS[device]['toggle_airplane'](serial)
                 # airplane_toggle_cmd_su(serial, device)
             
@@ -212,7 +218,7 @@ class ChangeIP(Resource):
                 fields_to_update = {'last_ip_change_time': current_time.timestamp()}
                 sm.update_data_in_redis(token, fields_to_update)
                 logger.debug(f"Updated data for token: {token} with the following fields: {fields_to_update}")
-                logger.info(f"IP CHANGED: {tgname}, {device}, id{id}, {username}, {serial}")
+                logger.info(f"IP CHANGE SUCCESS: {tgname}, {username}, id{id}({serial})")
                 return {'status': 'success', 'message': 'IP was changed'}, 200
             else:
                 logger.error(f"Failed to change IP: {tgname}, {device}, id{id}, {username}, {serial}")
@@ -225,7 +231,7 @@ class ChangeIP(Resource):
 class AutoChangeIP(Resource):
     def post(self, token):
         try:
-            logger.info("SET IP AUTO CHANGE")
+            logger.debug("SET IP AUTO CHANGE")
 
             user_data = sm.get_data_from_redis(token)
             logger.debug(f"GOT data from redis, token {token}")
@@ -234,6 +240,8 @@ class AutoChangeIP(Resource):
             device_model = user_data.get('device')
             action = 'toggle_airplane'
             job_id = f"changeip_{serial}"
+
+            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
 
             if not serial:
                 logger.error("Serial number not found in user_data.")
@@ -255,10 +263,10 @@ class AutoChangeIP(Resource):
                         scheduler.cancel(job_id)  # cancel job if interval_seconds == 0
                         # Verify job cancellation
                         if not check_job_exists(scheduler, job_id):
-                            logger.info(f'IP ROTATION CANCELED: {job_id}, id{device_id}, model: {device_model}')
+                            logger.info(f'IP ROTATION CANCELED: {user_log_credentials}, {job_id}')
                             return {'status': 'success', 'message': f'IP rotation canceled'}, 200
                         else:
-                            logger.error(f'IP ROTATION CANCELLATION FAILED: {job_id}, id{device_id}, model: {device_model}')
+                            logger.error(f'IP ROTATION CANCELLATION FAILED: {user_log_credentials}, {job_id}')
                     elif interval_seconds >= ALLOWED_INTERVAL:
                         # cancel existing job and create a new one with updated interval
                         scheduler.cancel(job_id)
@@ -272,10 +280,10 @@ class AutoChangeIP(Resource):
                         )
                         # Verify job update
                         if check_job_exists(scheduler, job_id):
-                            logger.info(f'IP ROTATION UPDATED: {job_id}, id{device_id}, model: {device_model}, interval: {interval_seconds} sec.')
+                            logger.info(f'IP ROTATION UPDATED: {user_log_credentials}, {job_id}, interval: {interval_seconds} sec.')
                             return {'status': 'success', 'message': f'IP rotation updated: interval {interval_seconds} sec'}, 200
                         else:
-                            logger.error(f'IP ROTATION UPDATE FAILED: {job_id}, id{device_id}, model: {device_model}')
+                            logger.error(f'IP ROTATION UPDATE FAILED: {user_log_credentials}, {job_id}')
                 else:
                     if interval_seconds >= ALLOWED_INTERVAL:
                         # create a new job as it doesn't exist
@@ -289,14 +297,14 @@ class AutoChangeIP(Resource):
                         )
                         # Verify job creation
                         if check_job_exists(scheduler, job_id):
-                            logger.info(f'IP ROTATION SCHEDULED: {job_id}, id{device_id}, model: {device_model}, interval: {interval_seconds} sec.')
+                            logger.info(f'IP ROTATION SCHEDULED: {user_log_credentials}, {job_id}, interval: {interval_seconds} sec.')
                             return {'status': 'success', 'message': f'IP rotation scheduled: interval {interval_seconds} sec'}, 200
                         else:
-                            logger.error(f'IP ROTATION SCHEDULING FAILED: {job_id}, id{device_id}, model: {device_model}')
+                            logger.error(f'IP ROTATION SCHEDULING FAILED: {user_log_credentials}, {job_id}')
                     elif interval_seconds == 0:
-                        logger.warning(f'IP ROTATION NOT FOUND TO CANCEL: {job_id}, id{device_id}, model: {device_model}')
+                        logger.warning(f'IP ROTATION NOT FOUND TO CANCEL: {user_log_credentials}, {job_id}')
                     else:
-                        logger.warning(f'INVALID INTERVAL: Interval cannot be less than 30 seconds. {job_id}, id{device_id}, model: {device_model}')
+                        logger.warning(f'INVALID INTERVAL: Interval cannot be less than 30 seconds. {user_log_credentials}, {job_id}')
 
         except Exception as e:
             logger.error(f"Error occurred in AutoChangeIP: {str(e)}")
@@ -328,7 +336,7 @@ class DeleteUser(Resource):
             tgname = user_data.get('tgname')
             job_id = f"changeip_{serial}"  # Определение job_id
             
-            logger.debug(f"DATA: {token}, {serial}, {proxy_id}, {device}, {username}")
+            logger.debug(f"DATA: {token}, {serial}, {proxy_id}, {device}, {username}, {tgname}")
             
             if not proxy_id or not token or not username:
                 logger.error("Missing required fields: proxy_id and/or token/or username.")
@@ -358,7 +366,7 @@ class DeleteUser(Resource):
                 logger.warning(f"User has {count_users} proxy, SKIP removing ACL: {username}, id{proxy_id}")
 
             # Remove from configuration
-            if not cm.remove_user_config(username, proxy_id, tgname):
+            if not cm.remove_user_config(username, proxy_id):
                 logger.error(f"Failed to remove user's config: {username}, id{proxy_id}")
                 return ({f"message": f"Failed to remove user's config: {username}, id{proxy_id}"}, 500)
 
@@ -482,8 +490,8 @@ class UpdateAuth(Resource):
             messages = []
 
             if protocol == 'both':
-                result1, message1 = cm.update_auth_in_config(proxy_id, username, 'http', auth_type, allow_ip, tgname)
-                result2, message2 = cm.update_auth_in_config(proxy_id, username, 'socks', auth_type, allow_ip, tgname)
+                result1, message1 = cm.update_auth_in_config(proxy_id, username, 'http', auth_type, allow_ip)
+                result2, message2 = cm.update_auth_in_config(proxy_id, username, 'socks', auth_type, allow_ip)
                 if not result1:
                     messages.append(f"Failed to update HTTP for {username}: {message1}")
                 else:
@@ -494,7 +502,7 @@ class UpdateAuth(Resource):
                 else:
                     messages.append(f"Successfully updated SOCKS for {username}")
             else:
-                result, message = cm.update_auth_in_config(proxy_id, username, protocol, auth_type, allow_ip, tgname)
+                result, message = cm.update_auth_in_config(proxy_id, username, protocol, auth_type, allow_ip)
                 if not result:
                     messages.append(f"Failed to update for {protocol}: {message}")
                 else:
@@ -585,6 +593,8 @@ class AddUserModem(Resource):
             user_data['mode'] = 'modem'
             parent_ip = 'none'
 
+            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
+
             #validating data
             # fields_to_validate = {
             #     # 'username': ts.is_valid_logopass,
@@ -606,7 +616,7 @@ class AddUserModem(Resource):
                 logger.warning(f"Serial already exists: {user_data['serial']}")
                 return {"message": f"Serial already exists: {user_data['serial']}"}, 400
 
-            logger.info(f"Redis check OK: {user_data['username']}")
+            logger.debug(f"Redis check OK: {user_data['username']}")
             
             status_handler = MODEM_HANDLERS.get(user_data['device'], {}).get('modem_status')
             status = status_handler(user_data['serial']) if status_handler else None
@@ -622,7 +632,7 @@ class AddUserModem(Resource):
                 interface_name = f"id{user_data['id']}"
                 ip_address = wait_for_ip(interface_name)
                 if ip_address != '127.0.0.1':
-                    logger.info(f"Modem is already on, IP: {ip_address}")
+                    logger.debug(f"Modem is already on, IP: {ip_address}")
 
             else:
                 handler = MODEM_HANDLERS.get(user_data['device'], {}).get('modem_on')
@@ -631,7 +641,7 @@ class AddUserModem(Resource):
                 interface_name = f"id{user_data['id']}"
                 ip_address = wait_for_ip(interface_name)
                 if ip_address != '127.0.0.1':
-                    logger.info("Modem turned on successfully")
+                    logger.info(f"Modem up success: {USER_LOG_CREDENTIALS}")
                 else:
                     logger.error("Interface not ready, unable to get IP address")
                     return {"message": "Interface not ready, unable to get IP address"}, 500
@@ -726,7 +736,7 @@ class AddUserAndroid(Resource):
                 logger.warning(f"Serial already exists: {user_data['serial']}")
                 return {"message": f"Serial already exists: {user_data['serial']}"}, 400
 
-            logger.info(f"Redis check OK: {user_data['username']}")
+            logger.debug(f"Redis check OK: {user_data['username']}")
 
             #checking modem
             status_handler = MODEM_HANDLERS.get(user_data['device'], {}).get('modem_status')
@@ -795,7 +805,7 @@ class UpdateUser(Resource):
     @ts.requires_role("admin")
     def patch(self, admin_token):
         try:
-            logger.info("UPDATE LOGOPASS.")
+            logger.debug("UPDATE LOGOPASS.")
             
             data = request.json
             if data is None:
@@ -817,6 +827,14 @@ class UpdateUser(Resource):
             redis_data = sm.get_data_from_redis(token)
             tgname = redis_data.get('tgname', '')
             proxy_id = redis_data.get('id', '')
+            serial = redis_data.get('serial', '')
+            username = redis_data.get('username', '')
+
+            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
+            
+            logger.info(f"UPDATE LOGOPASS: {user_log_credentials}")
+
+            username = {new_username}
 
             if not (update_username or update_password):
                 return {"message": "Invalid input. Either update username or password, not both or neither."}, 400
@@ -827,7 +845,7 @@ class UpdateUser(Resource):
                     return {"message": f"User {old_username} does not exist"}, 404
 
                 if not cm.update_user_in_acl(old_username, new_username, old_password, new_password, proxy_id) or \
-                        not cm.update_user_in_config(old_username, new_username, proxy_id, tgname):
+                        not cm.update_user_in_config(old_username, new_username, proxy_id):
                     raise Exception("Failed to update username")
 
                 if not sm.update_data_in_redis(token, {'username': new_username}):
@@ -837,16 +855,17 @@ class UpdateUser(Resource):
                 return {"message": "Username updated successfully"}, 200
 
             if update_password:
-                logger.info(f"TO CHECK PASS: {old_password}")
+                logger.debug(f"TO CHECK PASS: {old_password}")
                 if not cm.password_exists_in_ACL(old_password):
                     logger.error(f"USER with password {old_password} does not exist")
                     return {"UpdateUser": "User with password does not exist"}, 404
 
                 if not cm.update_user_in_acl(old_username, new_username, old_password, new_password, proxy_id) or \
-                        not cm.update_user_in_config(old_username, new_username, proxy_id, tgname):
+                        not cm.update_user_in_config(old_username, new_username, proxy_id):
                     raise Exception("Failed to update password")
                 
-                logger.info(f"Password updated successfully")
+                user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
+                logger.info(f"UPDATE LOGOPASS SUCCESS: {user_log_credentials}")
                 return {"message": "Password updated successfully"}, 200
 
 
@@ -907,7 +926,7 @@ class ReplaceAndroid(Resource):
             #     logger.error(f"IP is NOT found: {old_parent_ip}")
             #     return {"message": f"IP is NOT found: {old_parent_ip}"}, 404
 
-            if not cm.replace_android_in_config(old_parent_ip, new_parent_ip, old_id, new_id, username, tgname):
+            if not cm.replace_android_in_config(old_parent_ip, new_parent_ip, old_id, new_id, username):
                 logger.error(f"IP is NOT replaced: TOKEN {token}, TGNAME {tgname}, OLD IP {old_parent_ip}")
                 return {"message": f"IP is NOT replaced: TOKEN {token}, TGNAME {tgname}, OLD IP {old_parent_ip}"}, 404
 
@@ -964,11 +983,11 @@ class ReplaceModem(Resource):
             old_device = redis_data.get('device', '')
             tgname = redis_data.get('tgname', '')
 
-            if not cm.modem_id_exists_in_config(old_id, username, tgname):
+            if not cm.modem_id_exists_in_config(old_id, username):
                 logger.error(f"ID is NOT found: id{old_id}")
                 return {"message": f"ID is NOT found: id{old_id}"}, 404
 
-            if not cm.replace_modem_in_config(old_id, new_id, tgname, username):
+            if not cm.replace_modem_in_config(old_id, new_id, username):
                 logger.error(f"ID is NOT replaced: {old_id}")
                 return {"message": f"IP is NOT replaced: {old_id}"}, 404
             logger.info(f"ID is replaced: id{old_id} --> id{new_id}")
@@ -1046,7 +1065,12 @@ class ModemStatus(Resource):
             serial_number = user_data.get('serial')
             device_model = user_data.get('device')
             mode = user_data.get('mode')
-            
+            username = user_data.get('username')
+            tgname = user_data.get('tgname')
+            id = user_data.get('id')
+
+            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
+
             if not serial_number:
                 logger.error("Serial number not found in user data.")
                 return {'error': 'Serial number not found'}, 400
@@ -1065,7 +1089,7 @@ class ModemStatus(Resource):
                 logger.error("Device timed out, possibly it has lost connection")
                 return {"message": "Device timed out, possibly it has lost connection"}, 500
 
-            logger.info(f"Modem status for serial {serial_number}: {status}")
+            logger.info(f"MODEM STATUS: {user_log_credentials}: {status}")
             return {"message": status}, 200
 
         except Exception as e:
@@ -1076,7 +1100,7 @@ class ModemUp(Resource):
     @ts.requires_role("admin")
     def post(self, admin_token):
         try:
-            logger.info("SWITCH MODEM.")
+            logger.debug("SWITCH MODEM.")
 
             data = request.json
             if data is None:
@@ -1090,8 +1114,11 @@ class ModemUp(Resource):
             mode = user_data.get('mode')
             id = user_data.get('id')
             interface_name = f'id{id}'
+            tgname = user_data.get('tgname')
 
-            logger.info(f"SWITCHING to {mode}: id{id}, type {device_model}, serial {serial_number}")
+            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
+
+            logger.info(f"SWITCH MODEM: {mode}: {user_log_credentials}")
 
             if not all([serial_number, device_model, mode]):
                 return {"message": "Missing required fields"}, 400
@@ -1110,7 +1137,7 @@ class ModemUp(Resource):
                 if status == "rndis":
                     ip_address = wait_for_ip(interface_name)
                     if ip_address != '127.0.0.1':
-                        logger.info("Modem is already on")
+                        logger.info(f"MODEM IS ALREADY ON: {user_log_credentials}")
                         return {"message": "Modem is already on", "ip_address": ip_address}, 200
                     logger.error("Interface not ready, unable to get IP address")
                     return {"message": "Interface not ready, unable to get IP address"}, 500
@@ -1119,7 +1146,7 @@ class ModemUp(Resource):
                     handler(serial_number)
                     ip_address = wait_for_ip(interface_name)
                     if ip_address != '127.0.0.1':
-                        logger.info("Modem turned on successfully")
+                        logger.info(F"MODEM ON SUCCEES: {user_log_credentials}")
                         return {"message": "Modem turned on successfully", "ip_address": ip_address}, 200
                     logger.error("Interface not ready, unable to get IP address")
                     return {"message": "Interface not ready, unable to get IP address"}, 500
@@ -1128,10 +1155,10 @@ class ModemUp(Resource):
                 if status == "rndis":
                     handler = MODEM_HANDLERS.get(device_model, {}).get('modem_off')
                     handler(serial_number)
-                    logger.info("Modem turned off successfully")
+                    logger.info(F"MODEM OFF SUCCEES: {user_log_credentials}")
                     return {"message": "Modem turned off successfully"}, 200
                 else:
-                    logger.info("Modem is already turned off")
+                    logger.info(f"MODEM IS ALREADY ON: {user_log_credentials}")
                     return {"message": "Modem is already turned off"}, 200
             else:
                 logger.error("Invalid mode provided. Use either 'modem' or 'parent' as mode field.")
@@ -1145,7 +1172,7 @@ class AirplaneStatus(Resource):
     @ts.requires_role("admin")
     def post(self, admin_token):
         try:
-            logger.info("CHECK AIRPLANE STATUS.")
+            logger.debug("CHECK AIRPLANE STATUS.")
 
             data = request.json
             if data is None:
@@ -1158,7 +1185,10 @@ class AirplaneStatus(Resource):
             device_model = user_data.get('device')
             mode = user_data.get('mode')
             id = user_data.get('id')
-            
+            tgname = user_data.get('tgname')
+
+            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
+
             if not serial_number:
                 logger.error(f"Serial number not found, id{id}")
                 return {'error': 'Serial number not found'}, 400
@@ -1166,10 +1196,10 @@ class AirplaneStatus(Resource):
             status = check_airplane(serial_number)
 
             if status == 1:
-                logger.info(f"id{id}: Airplane is ON")
+                logger.info(f"AIRPLANE ON: {user_log_credentials}")
                 return {"message": "Airplane is ON"}, 200
             elif status == 0:
-                logger.info(f"id{id}: Airplane is OFF")
+                logger.info(f"AIRPLANE OFF: {user_log_credentials}")
                 return {"message": "Airplane is OFF"}, 200
             else:
                 logger.error(f'id{id}: Error or unknown status')
@@ -1193,8 +1223,11 @@ class AirplaneOn(Resource):
             serial = user_data.get('serial')
             device = user_data.get('device')
             id = user_data.get('id')
+            tgname = user_data.get('tgname')
 
-            logger.info(f"AIRPLANE ON: id{id}({serial}), {device}")
+            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
+
+            logger.debug(f"AIRPLANE ON: {user_log_credentials}")
 
             if not serial:
                 logger.error(f"Serial NOT found in redis: id{id}({serial}), {device}")
@@ -1202,19 +1235,19 @@ class AirplaneOn(Resource):
                 
             # Check if device has ROOT
             if device not in ROOT:
-                logger.info(f"Airplane ON via TOUCH: id{id}({serial}), {device}")
+                logger.debug(f"Airplane ON via TOUCH: id{id}({serial}), {device}")
                 if 'enable_airplane_mode' in MODEM_HANDLERS[device]:
                     airplane_on_result = MODEM_HANDLERS[device]['enable_airplane_mode'](serial)
                 else:
                     logger.error(f"No 'enable_airplane_mode': id{id}({serial}), {device}")
                     return {'error': 'Operation not supported for this device'}, 400
             else:
-                logger.info(f"Airplane ON via CMD: id{id}({serial}), {device}")
+                logger.debug(f"Airplane ON via CMD: id{id}({serial}), {device}")
                 airplane_on_result = MODEM_HANDLERS[device]['enable_airplane_mode'](serial)
                 # airplane_toggle_cmd_su(serial, device)
             
             if airplane_on_result:
-                logger.info(f"Airplane turned ON: id{id}({serial}), {device}")
+                logger.info(f"AIRPLANE ON: {user_log_credentials}")
                 return {'status': 'success', 'message': 'Airplane switched ON'}, 200
             else:
                 logger.error(f"Failed to turn ON airplane: id{id}({serial}), {device}")
@@ -1238,8 +1271,11 @@ class AirplaneOff(Resource):
             serial = user_data.get('serial')
             device = user_data.get('device')
             id = user_data.get('id')
+            tgname = user_data.get('tgname')
 
-            logger.info(f"AIRPLANE OFF: id{id}({serial}), {device}")
+            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
+
+            logger.debug(f"AIRPLANE OFF: id{id}({serial}), {device}")
 
             if not serial:
                 logger.error(f"Serial NOT found in redis: id{id}({serial}), {device}")
@@ -1247,19 +1283,19 @@ class AirplaneOff(Resource):
                 
             # Check if device has ROOT
             if device not in ROOT:
-                logger.info(f"Airplane OFF via TOUCH: id{id}({serial}), {device}")
+                logger.debug(f"Airplane OFF via TOUCH: id{id}({serial}), {device}")
                 if 'disable_airplane_mode' in MODEM_HANDLERS[device]:
                     airplane_off_result = MODEM_HANDLERS[device]['disable_airplane_mode'](serial)
                 else:
                     logger.error(f"No 'disable_airplane_mode': id{id}({serial}), {device}")
                     return {'error': 'Operation not supported for this device'}, 400
             else:
-                logger.info(f"Airplane OFF via CMD: id{id}({serial}), {device}")
+                logger.debug(f"Airplane OFF via CMD: id{id}({serial}), {device}")
                 airplane_off_result = MODEM_HANDLERS[device]['disable_airplane_mode'](serial)
                 # airplane_toggle_cmd_su(serial, device)
             
             if airplane_off_result:
-                logger.info(f"Airplane turned OFF: id{id}({serial}), {device}")
+                logger.info(f"AIRPLANE OFF: {user_log_credentials}")
                 return {'status': 'success', 'message': 'Airplane switched OFF'}, 200
             else:
                 logger.error(f"Failed to turn OFF airplane: id{id}({serial}), {device}")

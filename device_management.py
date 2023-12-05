@@ -8,7 +8,7 @@ logger = logging.getLogger()
 
 def adb_reboot_device(serial, device_id):
     adb_reboot = f"adb -s {serial} reboot"
-    logger.info(f"Executing reboot: id{device_id}, serial: {serial}")
+    logger.debug(f"Executing reboot: id{device_id}, serial: {serial}")
     result = subprocess.run(adb_reboot.split(), stdout=subprocess.PIPE)
     logger.debug(f"ADB reboot output : {result.stdout.decode()}")
 
@@ -38,7 +38,7 @@ def os_boot_status(serial, device, device_id, enable_modem=False):
     if device_status != "device":
         logger.warning(f"ADB NOT READY: {device_status} waiting 10s for next attempt")
         return f'ADB NOT READY: {device_status} waiting 10s for next attempt'
-    logger.info(f'ADB READY: {device_status}, id{device_id}, serial: {serial}')
+    logger.debug(f'ADB READY: {device_status}, id{device_id}, serial: {serial}')
 
     adb_get_boot_completed = f"adb -s {serial} shell getprop sys.boot_completed"
     logger.debug(f"OS BOOT checking: id{device_id}, serial: {serial}")
@@ -58,7 +58,7 @@ def os_boot_status(serial, device, device_id, enable_modem=False):
         #     consecutive_ok = 0  # сбрасываем счетчик
 
         # if consecutive_ok == 3:
-            logger.info(f"OS READY: id{device_id}, serial: {serial}")
+            logger.debug(f"OS READY: id{device_id}, serial: {serial}")
             if enable_modem:
                 logger.debug(f'Requires to turn modem ON: id{device_id}, serial: {serial}')
 

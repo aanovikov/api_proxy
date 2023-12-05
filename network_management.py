@@ -909,11 +909,11 @@ def get_ip_address(interface_name):
         return '127.0.0.1'
 
 def wait_for_ip(interface_name, retries=5, delay=3):
-    logger.info(f"Waiting for IP with {retries} retries and {delay}s delay: {interface_name}")
+    logger.debug(f"Waiting for IP with {retries} retries and {delay}s delay: {interface_name}")
     for i in range(retries):
         ip = get_ip_address(interface_name)
         if ip != '127.0.0.1':
-            logger.info(f"Got a valid IP {ip} on attempt {i+1}")
+            logger.debug(f"Got a valid IP {ip} on attempt {i+1}")
             return ip
         logger.warning(f"Failed to get a valid IP on attempt {i+1}")
         time.sleep(delay)

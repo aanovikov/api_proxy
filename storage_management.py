@@ -53,7 +53,7 @@ def store_to_redis(data, token):
             logger.error(f"Failed to store data for token: {token}")
             return False
 
-        logger.info(f"Stored data for token: {token}")
+        logger.debug(f"Stored data for token: {token}")
         return True
         
     except redis.ConnectionError:
@@ -88,7 +88,7 @@ def update_data_in_redis(token, fields):
         logger.error(f"Failed to update data for token: {token}")
         return False
 
-    logger.info(f"Updated data: token: {token}, NEW {field} = {value}")
+    logger.debug(f"Updated data: token: {token}, NEW {field} = {value}")
     return True
 
 def delete_from_redis(token):
