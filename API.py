@@ -180,7 +180,7 @@ class ChangeIP(Resource):
             last_ip_change_time = user_data.get('last_ip_change_time')
             current_time = datetime.now()
 
-            logger.info(f"IP CHANGE: {tgname}, {username}, id{id}({serial})")
+            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
 
             if not serial:
                 logger.error(f"Serial NOT found in redis: id{id}, user {username}, serial: {serial}")
@@ -218,7 +218,7 @@ class ChangeIP(Resource):
                 fields_to_update = {'last_ip_change_time': current_time.timestamp()}
                 sm.update_data_in_redis(token, fields_to_update)
                 logger.debug(f"Updated data for token: {token} with the following fields: {fields_to_update}")
-                logger.info(f"IP CHANGE SUCCESS: {tgname}, {username}, id{id}({serial})")
+                logger.info(f"IP CHANGE SUCCESS: {user_log_credentials}")
                 return {'status': 'success', 'message': 'IP was changed'}, 200
             else:
                 logger.error(f"Failed to change IP: {tgname}, {device}, id{id}, {username}, {serial}")
