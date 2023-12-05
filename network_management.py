@@ -57,7 +57,7 @@ def modem_toggle_coordinates_ON(serial, device_model):
         screen_input_command = SCREEN_INPUT.format(serial, x, y)
         rndis_status = RNDIS_STATUS.format(serial)
         
-        logger.info(f'MODEM switching is started: {serial}, type: {device_model}')
+        logger.debug(f'MODEM switching is started: {serial}, type: {device_model}')
 
         # Check modem status before next actions
         logger.debug(f'Checking RNDIS status 1: serial: {serial}, type: {device_model}')
@@ -68,7 +68,7 @@ def modem_toggle_coordinates_ON(serial, device_model):
         # If the output is empty, we assume the interface is DOWN.
         match = None
         if output == "":
-            logger.info(f"Modem interface output is empty, RNDIS is DOWN, attempting to switch ON")
+            logger.debug(f"Modem interface output is empty, RNDIS is DOWN, attempting to switch ON")
             interface_down = True
         else:
             match = re.search(r'(rndis0|usb0):.*state (DOWN)', output)
@@ -78,7 +78,7 @@ def modem_toggle_coordinates_ON(serial, device_model):
             # If modem DOWN - switch ON tethering
             if match:
                 interface, state = match.groups()
-                logger.info(f"{interface} is DOWN")
+                logger.debug(f"{interface} is DOWN")
 
             # Wake up display and check its status
             for attempt in range(3):  # Try up to 3 times
@@ -120,7 +120,7 @@ def modem_toggle_coordinates_ON(serial, device_model):
                 match = re.search(r'(rndis0|usb0):.*state (UP)', output)
                 if match:
                     interface, state = match.groups()
-                    logger.info(f"{interface} is now UP after tapping")
+                    logger.debug(f"{interface} is now UP after tapping")
                     logger.debug(f'GO HOME: {serial}, type: {device_model}')
                     subprocess.run(go_back, shell=True)
                 else:
@@ -128,7 +128,7 @@ def modem_toggle_coordinates_ON(serial, device_model):
                     return False
 
         else:
-            logger.info(f"Modem interface is already UP or output is not as expected, no action needed")
+            logger.debug(f"Modem interface is already UP or output is not as expected, no action needed")
             logger.debug(f'GO HOME: {serial}, type: {device_model}')
             subprocess.run(go_back, shell=True)
 
@@ -160,7 +160,7 @@ def modem_toggle_coordinates_OFF(serial, device_model):
         screen_input_command = SCREEN_INPUT.format(serial, x, y)
         rndis_status = RNDIS_STATUS.format(serial)
         
-        logger.info(f'MODEM switching off started: serial: {serial}, type: {device_model}')
+        logger.debug(f'MODEM switching off started: serial: {serial}, type: {device_model}')
 
         # Check RNDIS status before next actions
         logger.debug(f'Checking RNDIS status before toggling off: serial: {serial}, type: {device_model}')
@@ -179,7 +179,7 @@ def modem_toggle_coordinates_OFF(serial, device_model):
             match = re.search(r'(rndis0|usb0):.*state (UP)', output)
         if match:
             interface, state = match.groups()
-            logger.info(f"{interface} is UP, attempting to switch OFF")
+            logger.debug(f"{interface} is UP, attempting to switch OFF")
 
             # The rest of the function mirrors the ON functionality but designed to switch OFF the interface
             # Wake up display, open settings, tap coordinates, check status...
@@ -215,12 +215,12 @@ def modem_toggle_coordinates_OFF(serial, device_model):
             logger.debug(f'RNDIS status RESULT: {output}')
 
             if output == "":
-                logger.info(f"Modem interface output is empty after tapping, assuming RNDIS is now DOWN")
+                logger.debug(f"Modem interface output is empty after tapping, assuming RNDIS is now DOWN")
             else:
                 match = re.search(r'(rndis0|usb0):.*state (DOWN)', output)
                 if match:
                     interface, state = match.groups()
-                    logger.info(f"{interface} is now DOWN after tapping")
+                    logger.debug(f"{interface} is now DOWN after tapping")
                 else:
                     logger.error(f"Failed to switch OFF RNDIS interface, status is not DOWN after tapping")
                     return False
@@ -228,7 +228,7 @@ def modem_toggle_coordinates_OFF(serial, device_model):
             logger.debug(f'GO HOME: {serial}, type: {device_model}')
             subprocess.run(go_back, shell=True)
         else:
-            logger.info(f"Modem interface is already DOWN or output is not as expected, no action needed")
+            logger.debug(f"Modem interface is already DOWN or output is not as expected, no action needed")
             logger.debug(f'GO HOME: {serial}, type: {device_model}')
             subprocess.run(go_back, shell=True)
             return True
@@ -247,7 +247,7 @@ def modem_toggle_cmd(serial, mode):
             return
         
         command = f"adb -s {serial} shell svc usb setFunctions {mode}"
-        logger.info(f"Setting mode to {mode.upper()}: {command}")
+        logger.debug(f"Setting mode to {mode.upper()}: {command}")
 
         result = subprocess.run(command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
@@ -261,7 +261,7 @@ def modem_toggle_cmd(serial, mode):
         logger.error(f"An unexpected error occurred: {e}, serial: {serial}")
 
 def modem_get_status(serial, device_model):
-    logger.info(f"Checking modem status: serial: {serial}, device model: {device_model}")
+    logger.debug(f"Checking modem status: serial: {serial}, device model: {device_model}")
 
     # Базовая команда для запроса статуса модема
     base_command = f"adb -s {serial} shell svc usb getFunction"
@@ -285,10 +285,10 @@ def modem_get_status(serial, device_model):
             logger.error(f"Device not found: serial {serial} ")
             return "device_not_found"
         elif "rndis" in error:
-            logger.info(f"Device is MODEM: serial {serial}")
+            logger.debug(f"Device is MODEM: serial {serial}")
             return "rndis"
         else:
-            logger.info(f"Device is NOT MODEM: serial {serial}")
+            logger.debug(f"Device is NOT MODEM: serial {serial}")
             return "rndis_off"
 
     except TimeoutExpired:
@@ -402,14 +402,14 @@ def airplane_toggle_cmd(serial, device_model):
     try:
         delay = 1
         adb_base_command = ["adb", "-s", serial, "shell"]
-        logger.info(f"Toggling airplane mode: type: {device_model}, {serial}")
+        logger.debug(f"Toggling airplane mode: type: {device_model}, {serial}")
 
         # Включаем режим в самолете
         airplane_on_command = adb_base_command + [AIRPLANE_ON_CMD]
-        logger.info(f"Executing airplane ON: serial: {serial}")
+        logger.debug(f"Executing airplane ON: serial: {serial}")
         subprocess.run(airplane_on_command, check=True, timeout=10)
         
-        logger.info(f"Pause for {delay} seconds")
+        logger.debug(f"Pause for {delay} seconds")
         time.sleep(delay)
 
         if check_airplane(serial) == 1:
@@ -419,7 +419,7 @@ def airplane_toggle_cmd(serial, device_model):
 
         # Выключаем режим в самолете
         airplane_off_command = adb_base_command + [AIRPLANE_OFF_CMD]
-        logger.info(f"Executing airplane OFF: serial: {serial}")
+        logger.debug(f"Executing airplane OFF: serial: {serial}")
         subprocess.run(airplane_off_command, check=True, timeout=10)
         
         if check_airplane(serial) == 0:
@@ -427,7 +427,7 @@ def airplane_toggle_cmd(serial, device_model):
         else:
             raise RuntimeError("Failed to turn OFF airplane mode")
 
-        logger.info(f"Airplane mode toggled: serial {serial}")
+        logger.debug(f"Airplane mode toggled: serial {serial}")
         return True
 
     except subprocess.CalledProcessError as e:
@@ -441,13 +441,13 @@ def enable_airplane_mode_cmd(serial, device_model):
     try:
         delay = 1
         adb_base_command = ["adb", "-s", serial, "shell"]
-        logger.info(f"Enabling airplane mode: type: {device_model}, {serial}")
+        logger.debug(f"Enabling airplane mode: type: {device_model}, {serial}")
 
         airplane_on_command = adb_base_command + [AIRPLANE_ON_CMD]
-        logger.info(f"Executing airplane ON: serial: {serial}")
+        logger.debug(f"Executing airplane ON: serial: {serial}")
         subprocess.run(airplane_on_command, check=True, timeout=10)
 
-        logger.info(f"Pause for {delay} seconds")
+        logger.debug(f"Pause for {delay} seconds")
         time.sleep(delay)
 
         if check_airplane(serial) == 1:
@@ -467,13 +467,13 @@ def disable_airplane_mode_cmd(serial, device_model):
     try:
         delay = 1
         adb_base_command = ["adb", "-s", serial, "shell"]
-        logger.info(f"Disabling airplane mode: type: {device_model}, {serial}")
+        logger.debug(f"Disabling airplane mode: type: {device_model}, {serial}")
 
         airplane_off_command = adb_base_command + [AIRPLANE_OFF_CMD]
-        logger.info(f"Executing airplane OFF: serial: {serial}")
+        logger.debug(f"Executing airplane OFF: serial: {serial}")
         subprocess.run(airplane_off_command, check=True, timeout=10)
 
-        logger.info(f"Pause for {delay} seconds")
+        logger.debug(f"Pause for {delay} seconds")
         time.sleep(delay)
 
         if check_airplane(serial) == 0:
@@ -493,15 +493,15 @@ def airplane_toggle_cmd_su(serial, device_model):
     try:
         delay = 1
         adb_base_command = ["adb", "-s", serial, "shell"]
-        logger.info(f"Toggling airplane mode: type: {device_model}, {serial}")
+        logger.debug(f"Toggling airplane mode: type: {device_model}, {serial}")
 
         # Включаем режим в самолете
         airplane_on_command = adb_base_command + [AIRPLANE_ON_CMD_SU]
         logger.debug(f'NO SU: {airplane_on_command}')
-        logger.info(f"Executing airplane ON: serial: {serial}")
+        logger.debug(f"Executing airplane ON: serial: {serial}")
         subprocess.run(airplane_on_command, check=True, timeout=10)
         
-        logger.info(f"Pause for {delay} seconds")
+        logger.debug(f"Pause for {delay} seconds")
         time.sleep(delay)
 
         if check_airplane(serial) == 1:
@@ -511,7 +511,7 @@ def airplane_toggle_cmd_su(serial, device_model):
 
         # Выключаем режим в самолете
         airplane_off_command = adb_base_command + [AIRPLANE_OFF_CMD_SU]
-        logger.info(f"Executing airplane OFF: serial: {serial}")
+        logger.debug(f"Executing airplane OFF: serial: {serial}")
         subprocess.run(airplane_off_command, check=True, timeout=10)
 
         if check_airplane(serial) == 0:
@@ -519,7 +519,7 @@ def airplane_toggle_cmd_su(serial, device_model):
         else:
             raise RuntimeError("Failed to turn OFF airplane mode")
 
-        logger.info(f"Airplane mode toggled: serial {serial}")
+        logger.debug(f"Airplane mode toggled: serial {serial}")
         return True
 
     except subprocess.CalledProcessError as e:
@@ -533,14 +533,14 @@ def enable_airplane_mode_cmd_su(serial, device_model):
     try:
         delay = 1
         adb_base_command = ["adb", "-s", serial, "shell"]
-        logger.info(f"Enabling airplane mode SU: type: {device_model}, {serial}")
+        logger.debug(f"Enabling airplane mode SU: type: {device_model}, {serial}")
 
         airplane_on_command = adb_base_command + [AIRPLANE_ON_CMD_SU]
         logger.debug(f'NO SU: {airplane_on_command}')
-        logger.info(f"Executing airplane ON SU: serial: {serial}")
+        logger.debug(f"Executing airplane ON SU: serial: {serial}")
         subprocess.run(airplane_on_command, check=True, timeout=10)
 
-        logger.info(f"Pause for {delay} seconds")
+        logger.debug(f"Pause for {delay} seconds")
         time.sleep(delay)
 
         if check_airplane(serial) == 1:
@@ -560,13 +560,13 @@ def disable_airplane_mode_cmd_su(serial, device_model):
     try:
         delay = 1
         adb_base_command = ["adb", "-s", serial, "shell"]
-        logger.info(f"Disabling airplane mode SU: type: {device_model}, {serial}")
+        logger.debug(f"Disabling airplane mode SU: type: {device_model}, {serial}")
 
         airplane_off_command = adb_base_command + [AIRPLANE_OFF_CMD_SU]
-        logger.info(f"Executing airplane OFF SU: serial: {serial}")
+        logger.debug(f"Executing airplane OFF SU: serial: {serial}")
         subprocess.run(airplane_off_command, check=True, timeout=10)
 
-        logger.info(f"Pause for {delay} seconds")
+        logger.debug(f"Pause for {delay} seconds")
         time.sleep(delay)
 
         if check_airplane(serial) == 0:
@@ -609,7 +609,7 @@ def airplane_toggle_coordinates(serial, device_model):
         result = subprocess.run(status_display, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         is_display_on = 'state=ON' in result.stdout.decode()
 
-        logger.info(f'AIRPLANE switching is started: {serial}, type: {device_model}')
+        logger.debug(f'AIRPLANE switching is started: {serial}, type: {device_model}')
 
         if not is_display_on:
             for _ in range(3): # Wake up display and check its status
@@ -630,7 +630,7 @@ def airplane_toggle_coordinates(serial, device_model):
                 logger.error(f"Display did not turn on after 3 attempts, serial: {serial}")
                 return False
         else:
-            logger.info("Display is already ON, skipping the wake-up cycle.")
+            logger.debug("Display is already ON, skipping the wake-up cycle.")
 
         logger.debug(f'Opening Airplane settings: serial: {serial}, type: {device_model}')
         subprocess.run(open_settings_command, shell=True)
@@ -646,7 +646,7 @@ def airplane_toggle_coordinates(serial, device_model):
             while time.time() - start_time <= 3:
                 result = subprocess.run(status_airplane, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 if '1' in result.stdout.decode():
-                    logger.info(f"AIRPLANE ON")
+                    logger.debug(f"AIRPLANE ON")
                     break
             else:
                 # Если режим самолета не включился, то переходим к следующей итерации цикла for
@@ -668,7 +668,7 @@ def airplane_toggle_coordinates(serial, device_model):
             while time.time() - start_time <= 3:
                 result = subprocess.run(status_airplane, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 if '0' in result.stdout.decode():
-                    logger.info(f"AIRPLANE OFF")
+                    logger.debug(f"AIRPLANE OFF")
                     break
             else:
                 continue
@@ -720,7 +720,7 @@ def enable_airplane_mode(serial, device_model):
         result = subprocess.run(status_display, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         is_display_on = 'state=ON' in result.stdout.decode()
 
-        logger.info(f'AIRPLANE switching is started: {serial}, type: {device_model}')
+        logger.debug(f'AIRPLANE switching is started: {serial}, type: {device_model}')
 
         if not is_display_on:
             for _ in range(3): # Wake up display and check its status
@@ -741,7 +741,7 @@ def enable_airplane_mode(serial, device_model):
                 logger.error(f"Display did not turn on after 3 attempts, serial: {serial}")
                 return False
         else:
-            logger.info("Display is already ON, skipping the wake-up cycle.")
+            logger.debug("Display is already ON, skipping the wake-up cycle.")
 
         logger.debug(f'Opening Airplane settings: serial: {serial}, type: {device_model}')
         subprocess.run(open_settings_command, shell=True)
@@ -757,7 +757,7 @@ def enable_airplane_mode(serial, device_model):
             while time.time() - start_time <= 3:
                 result = subprocess.run(status_airplane, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 if '1' in result.stdout.decode():
-                    logger.info(f"AIRPLANE ON")
+                    logger.debug(f"AIRPLANE ON")
                     break
             else:
                 # Если режим самолета не включился, то переходим к следующей итерации цикла for
@@ -800,7 +800,7 @@ def disable_airplane_mode(serial, device_model):
         result = subprocess.run(status_display, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         is_display_on = 'state=ON' in result.stdout.decode()
 
-        logger.info(f'AIRPLANE switching is started: {serial}, type: {device_model}')
+        logger.debug(f'AIRPLANE switching is started: {serial}, type: {device_model}')
 
         if not is_display_on:
             for _ in range(3): # Wake up display and check its status
@@ -821,7 +821,7 @@ def disable_airplane_mode(serial, device_model):
                 logger.error(f"Display did not turn on after 3 attempts, serial: {serial}")
                 return False
         else:
-            logger.info("Display is already ON, skipping the wake-up cycle.")
+            logger.debug("Display is already ON, skipping the wake-up cycle.")
 
         logger.debug(f'Opening Airplane settings: serial: {serial}, type: {device_model}')
         subprocess.run(open_settings_command, shell=True)
@@ -836,7 +836,7 @@ def disable_airplane_mode(serial, device_model):
             while time.time() - start_time <= 3:
                 result = subprocess.run(status_airplane, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 if '0' in result.stdout.decode():
-                    logger.info(f"AIRPLANE OFF")
+                    logger.debug(f"AIRPLANE OFF")
                     break
             else:
                 continue
@@ -859,25 +859,25 @@ def disable_airplane_mode(serial, device_model):
 
 def toggle_wifi(serial, action, delay=1, max_retries=10):
     try:
-        logger.info(f"Toggling WiFi for device {serial}")
+        logger.debug(f"Toggling WiFi for device {serial}")
 
         # Initial status check
         adb_command = f"adb -s {serial} shell dumpsys wifi | grep 'mNetworkInfo'"
         output = subprocess.getoutput(adb_command)
         status = output.split('state: ')[1].split('/')[0]
-        logger.info(f"Current WiFi status: {status}")
+        logger.debug(f"Current WiFi status: {status}")
 
         if action == "on" and status == "CONNECTED":
-            logger.info("WiFi is already connected. No action needed.")
+            logger.debug("WiFi is already connected. No action needed.")
             return
         elif action == "off" and status == "DISCONNECTED":
-            logger.info("WiFi is already disconnected. No action needed.")
+            logger.debug("WiFi is already disconnected. No action needed.")
             return
 
         # Toggle WiFi
         toggle_command = "enable" if action == "on" else "disable"
         subprocess.run(f"adb -s {serial} shell svc wifi {toggle_command}", shell=True)
-        logger.info(f"Switched WiFi {action.upper()}. Waiting to update status...")
+        logger.debug(f"Switched WiFi {action.upper()}. Waiting to update status...")
 
         # Re-check status with delay and retries
         retries = 0
@@ -887,10 +887,10 @@ def toggle_wifi(serial, action, delay=1, max_retries=10):
             new_status = output.split('state: ')[1].split('/')[0]
 
             if (action == "on" and new_status == "CONNECTED") or (action == "off" and new_status == "DISCONNECTED"):
-                logger.info(f"New WiFi status: {new_status}. Done!")
+                logger.debug(f"New WiFi status: {new_status}. Done!")
                 return
             
-            logger.info(f"Status not updated yet. Retrying... ({retries + 1}/{max_retries})")
+            logger.debug(f"Status not updated yet. Retrying... ({retries + 1}/{max_retries})")
             retries += 1
 
         logger.warning("Max retries reached. Exiting function.")
@@ -902,7 +902,7 @@ def toggle_wifi(serial, action, delay=1, max_retries=10):
 def get_ip_address(interface_name):
     try:
         ip_address = ni.ifaddresses(interface_name)[ni.AF_INET][0]['addr']
-        logger.info(f"IP address obtained: {interface_name} - {ip_address}")
+        logger.debug(f"IP address obtained: {interface_name} - {ip_address}")
         return ip_address
     except Exception as e:
         logger.error(f"Couldn't fetch IP for interface {interface_name}: {str(e)}")
@@ -933,7 +933,7 @@ def check_rndis_iface(device_id, serial):
             
             if match:
                 interface, state = match.groups()
-                logger.info(f"RNDIS iface is ACTIVE: id{device_id}, serial: {serial}")
+                logger.debug(f"RNDIS iface is ACTIVE: id{device_id}, serial: {serial}")
                 return True
         
         logger.warning(f"RNDIS iface is NOT ACTIVE: id{device_id}, serial: {serial}")
