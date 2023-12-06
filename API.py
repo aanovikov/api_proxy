@@ -1056,12 +1056,14 @@ class ModemStatus(Resource):
             logger.info("CHECK MODEM STATUS.")
 
             data = request.json
+            logger.info(f"Received data: {data}")  # Логирование данных запроса
             if data is None:
                 return {"message": "Invalid request: JSON body required"}, 400
             
             token = data.get('token')
 
             user_data = sm.get_data_from_redis(token)
+            logger.info(f"User data from Redis: {user_data}")  # Логирование данных пользователя
             serial = user_data.get('serial')
             device_model = user_data.get('device')
             mode = user_data.get('mode')
@@ -1080,6 +1082,7 @@ class ModemStatus(Resource):
                 logger.error("Invalid device model provided. Use a correct 'device' field.")
                 return {"message": "Invalid device model provided. Use a correct 'device' field."}, 400
 
+            logger.info(f"Handler for device model {device_model}: {handler}, Serial: {serial}")  # Подтверждение наличия serial
             status = handler(serial) if handler else None
 
             if status == "device_not_found":
@@ -1093,7 +1096,7 @@ class ModemStatus(Resource):
             return {"message": status}, 200
 
         except Exception as e:
-            logger.error(f"An error occurred: {str(e)}")
+            logger.exception("An error occurred")  # Детализированное логирование исключения
             return {"message": f"An error occurred: {str(e)}"}, 500
 
 class ModemUp(Resource):
