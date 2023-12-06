@@ -1062,7 +1062,7 @@ class ModemStatus(Resource):
             token = data.get('token')
 
             user_data = sm.get_data_from_redis(token)
-            serial_number = user_data.get('serial')
+            serial = user_data.get('serial')
             device_model = user_data.get('device')
             mode = user_data.get('mode')
             username = user_data.get('username')
@@ -1071,7 +1071,7 @@ class ModemStatus(Resource):
 
             user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
 
-            if not serial_number:
+            if not serial:
                 logger.error("Serial number not found in user data.")
                 return {'error': 'Serial number not found'}, 400
 
@@ -1080,7 +1080,7 @@ class ModemStatus(Resource):
                 logger.error("Invalid device model provided. Use a correct 'device' field.")
                 return {"message": "Invalid device model provided. Use a correct 'device' field."}, 400
 
-            status = handler(serial_number) if handler else None
+            status = handler(serial) if handler else None
 
             if status == "device_not_found":
                 logger.error("Device not found, possibly it has lost connection")
