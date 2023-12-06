@@ -1112,7 +1112,7 @@ class ModemUp(Resource):
             token = data.get('token')
 
             user_data = sm.get_data_from_redis(token)
-            serial_number = user_data.get('serial')
+            serial = user_data.get('serial')
             device_model = user_data.get('device')
             mode = user_data.get('mode')
             id = user_data.get('id')
@@ -1123,11 +1123,11 @@ class ModemUp(Resource):
 
             logger.info(f"SWITCH MODEM: {mode}: {user_log_credentials}")
 
-            if not all([serial_number, device_model, mode]):
+            if not all([serial, device_model, mode]):
                 return {"message": "Missing required fields"}, 400
 
             status_handler = MODEM_HANDLERS.get(device_model, {}).get('modem_status')
-            status = status_handler(serial_number) if status_handler else None
+            status = status_handler(serial) if status_handler else None
 
             if status == "device_not_found":
                 logger.error("Device not found, possibly it has lost connection")
@@ -1146,7 +1146,7 @@ class ModemUp(Resource):
                     return {"message": "Interface not ready, unable to get IP address"}, 500
                 else:
                     handler = MODEM_HANDLERS.get(device_model, {}).get('modem_on')
-                    handler(serial_number)
+                    handler(serial)
                     ip_address = wait_for_ip(interface_name)
                     if ip_address != '127.0.0.1':
                         logger.info(F"MODEM ON SUCCEES: {user_log_credentials}")
@@ -1157,7 +1157,7 @@ class ModemUp(Resource):
             elif mode == "android":
                 if status == "rndis":
                     handler = MODEM_HANDLERS.get(device_model, {}).get('modem_off')
-                    handler(serial_number)
+                    handler(serial)
                     logger.info(F"MODEM OFF SUCCEES: {user_log_credentials}")
                     return {"message": "Modem turned off successfully"}, 200
                 else:
