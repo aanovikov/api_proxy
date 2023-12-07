@@ -593,6 +593,8 @@ class AddUserModem(Resource):
             user_data['mode'] = 'modem'
             parent_ip = 'none'
             tgname = user_data['tgname']
+            id = user_data['id']
+            serial = user_data['serial']
 
             user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
 
