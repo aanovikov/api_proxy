@@ -641,7 +641,7 @@ class AddUserModem(Resource):
                 interface_name = f"id{user_data['id']}"
                 ip_address = wait_for_ip(interface_name)
                 if ip_address != '127.0.0.1':
-                    logger.info(f"Modem up success: {USER_LOG_CREDENTIALS}")
+                    logger.info(f"Modem up success: {user_log_credentials}")
                 else:
                     logger.error("Interface not ready, unable to get IP address")
                     return {"message": "Interface not ready, unable to get IP address"}, 500
