@@ -81,6 +81,9 @@ class Reboot(Resource):
             logger.debug("REBOOT")
 
             user_data = sm.get_data_from_redis(token)
+            if user_data is None:
+                return {'error': 'Proxy has expired or the token was not found'}, 404
+
             serial = user_data.get('serial')
             device = user_data.get('device')
             mode = user_data.get('mode')
@@ -88,10 +91,6 @@ class Reboot(Resource):
             tgname = user_data.get('tgname')
             # job_id = f'modemup_{serial}'
             # action = 'modem_on'
-
-            if not serial:
-                logger.error(f"Serial: {serial} NOT found in redis.")
-                return {'error': 'Serial number not found'}, 400
 
             reboot_status = os_boot_status(serial, device, device_id, enable_modem=False)
 
@@ -136,15 +135,14 @@ class DeviceStatus(Resource):
                 device = None
             else:
                 user_data = sm.get_data_from_redis(token)
+                if user_data is None:
+                    return {'error': 'Proxy has expired or the token was not found'}, 404
+
                 serial = user_data.get('serial')
                 device = user_data.get('device')
                 device_id = user_data.get('id')
                 tgname = user_data.get('tgname')
                 logger.info(f"STATUS: {tgname}, id{device_id}({serial})")
-
-            if not serial:
-                logger.error(f"Serial not found in user data: {serial}.")
-                return {'error': 'Serial not found'}, 400
 
             device_status = get_adb_device_status(serial, device_id)
 
@@ -170,6 +168,9 @@ class ChangeIP(Resource):
     def get(self, token):
         try:
             user_data = sm.get_data_from_redis(token)
+            if user_data is None:
+                return {'error': 'Proxy has expired or the token was not found'}, 404
+
             serial = user_data.get('serial')
             device = user_data.get('device')
             username = user_data.get('username')
@@ -234,6 +235,9 @@ class AutoChangeIP(Resource):
             logger.debug("SET IP AUTO CHANGE")
 
             user_data = sm.get_data_from_redis(token)
+            if user_data is None:
+                return {'error': 'Proxy has expired or the token was not found'}, 404
+
             logger.debug(f"GOT data from redis, token {token}")
             serial = user_data.get('serial')
             device_id = user_data.get('id')
@@ -326,6 +330,8 @@ class DeleteUser(Resource):
             token = data.get('token') # to remove key using token in redis
 
             user_data = sm.get_data_from_redis(token)
+            if user_data is None:
+                return {'error': 'Proxy has expired or the token was not found'}, 404
 
             logger.debug(f"GOT data from redis, token {token}")
 
@@ -465,6 +471,8 @@ class UpdateAuth(Resource):
                 return {"message": "Missing required field: allow_ip"}, 400
 
             user_data = sm.get_data_from_redis(token)
+            if user_data is None:
+                return {'error': 'Proxy has expired or the token was not found'}, 404
 
             username = user_data.get('username')
             tgname = user_data.get('tgname')
@@ -828,6 +836,9 @@ class UpdateUser(Resource):
             update_password = old_password is not None and new_password is not None
 
             redis_data = sm.get_data_from_redis(token)
+            if redis_data is None:
+                return {'error': 'Proxy has expired or the token was not found'}, 404
+
             tgname = redis_data.get('tgname', '')
             proxy_id = redis_data.get('id', '')
             serial = redis_data.get('serial', '')
@@ -1066,6 +1077,9 @@ class ModemStatus(Resource):
             token = data.get('token')
 
             user_data = sm.get_data_from_redis(token)
+            if user_data is None:
+                return {'error': 'Proxy has expired or the token was not found'}, 404
+
             logger.info(f"User data from Redis: {user_data}")  # Логирование данных пользователя
             serial = user_data.get('serial')
             device_model = user_data.get('device')
@@ -1115,6 +1129,9 @@ class ModemUp(Resource):
             token = data.get('token')
 
             user_data = sm.get_data_from_redis(token)
+            if user_data is None:
+                return {'error': 'Proxy has expired or the token was not found'}, 404
+
             serial = user_data.get('serial')
             device_model = user_data.get('device')
             mode = user_data.get('mode')
@@ -1187,6 +1204,9 @@ class AirplaneStatus(Resource):
             token = data.get('token')
 
             user_data = sm.get_data_from_redis(token)
+            if user_data is None:
+                return {'error': 'Proxy has expired or the token was not found'}, 404
+
             serial_number = user_data.get('serial')
             device_model = user_data.get('device')
             mode = user_data.get('mode')
@@ -1226,6 +1246,9 @@ class AirplaneOn(Resource):
             token = data.get('token')
 
             user_data = sm.get_data_from_redis(token)
+            if user_data is None:
+                return {'error': 'Proxy has expired or the token was not found'}, 404
+
             serial = user_data.get('serial')
             device = user_data.get('device')
             id = user_data.get('id')
@@ -1274,6 +1297,9 @@ class AirplaneOff(Resource):
             token = data.get('token')
 
             user_data = sm.get_data_from_redis(token)
+            if user_data is None:
+                return {'error': 'Proxy has expired or the token was not found'}, 404
+                
             serial = user_data.get('serial')
             device = user_data.get('device')
             id = user_data.get('id')

@@ -67,13 +67,16 @@ def store_to_redis(data, token):
         return False
 
 def get_data_from_redis(token):
-    r = connect_to_redis()
-    all_values = r.hgetall(token)
-    if not all_values:
-        logger.error(f"No data found for token {token}")
-        #traceback.print_stack()
-        raise Exception(f"No data found for token {token}")
-    return {k.decode('utf-8'): v.decode('utf-8') for k, v in all_values.items()}
+    try:
+        r = connect_to_redis()
+        all_values = r.hgetall(token)
+        if not all_values:
+            logger.warning(f"No data found for token {token}")
+            return None
+        return {k.decode('utf-8'): v.decode('utf-8') for k, v in all_values.items()}
+    except RedisError as e:
+        logger.error(f"Redis error: {e}")
+        raise
 
 def update_data_in_redis(token, fields):
     pipe = get_redis_pipeline()

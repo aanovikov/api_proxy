@@ -407,7 +407,9 @@ def airplane_toggle_cmd(serial, device_model):
         # Включаем режим в самолете
         airplane_on_command = adb_base_command + [AIRPLANE_ON_CMD]
         logger.debug(f"Executing airplane ON: serial: {serial}")
-        subprocess.run(airplane_on_command, check=True, timeout=10)
+        result_on = subprocess.run(airplane_on_command, check=True, timeout=10, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        logger.debug(f"Airplane ON stdout: {result_on.stdout}")
+        logger.debug(f"Airplane ON stderr: {result_on.stderr}")
         
         logger.debug(f"Pause for {delay} seconds")
         time.sleep(delay)
@@ -420,7 +422,9 @@ def airplane_toggle_cmd(serial, device_model):
         # Выключаем режим в самолете
         airplane_off_command = adb_base_command + [AIRPLANE_OFF_CMD]
         logger.debug(f"Executing airplane OFF: serial: {serial}")
-        subprocess.run(airplane_off_command, check=True, timeout=10)
+        result_off = subprocess.run(airplane_off_command, check=True, timeout=10, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        logger.debug(f"Airplane OFF command stdout: {result_off.stdout}")
+        logger.debug(f"Airplane OFF command stderr: {result_off.stderr}")
         
         if check_airplane(serial) == 0:
             logger.debug(f"AIRPLANE OFF")
@@ -499,7 +503,9 @@ def airplane_toggle_cmd_su(serial, device_model):
         airplane_on_command = adb_base_command + [AIRPLANE_ON_CMD_SU]
         logger.debug(f'NO SU: {airplane_on_command}')
         logger.debug(f"Executing airplane ON: serial: {serial}")
-        subprocess.run(airplane_on_command, check=True, timeout=10)
+        result_on = subprocess.run(airplane_on_command, check=True, timeout=10, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        logger.debug(f"Airplane ON stdout: {result_on.stdout}")
+        logger.debug(f"Airplane ON stderr: {result_on.stderr}")
         
         logger.debug(f"Pause for {delay} seconds")
         time.sleep(delay)
@@ -512,7 +518,9 @@ def airplane_toggle_cmd_su(serial, device_model):
         # Выключаем режим в самолете
         airplane_off_command = adb_base_command + [AIRPLANE_OFF_CMD_SU]
         logger.debug(f"Executing airplane OFF: serial: {serial}")
-        subprocess.run(airplane_off_command, check=True, timeout=10)
+        result_off = subprocess.run(airplane_off_command, check=True, timeout=10, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        logger.debug(f"Airplane OFF command stdout: {result_off.stdout}")
+        logger.debug(f"Airplane OFF command stderr: {result_off.stderr}")
 
         if check_airplane(serial) == 0:
             logger.debug(f"AIRPLANE OFF")
