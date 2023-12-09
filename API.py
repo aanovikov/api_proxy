@@ -40,7 +40,7 @@ EXPIRY_TIME = 60
 SCHEDULER_RDB = os.getenv('SCHEDULER_RDB')
 
 # templates for log
-USER_LOG_CREDENTIALS = '{tgname}, id{id}({serial})'
+USER_LOG_CREDENTIALS = '{tgname}, id{id}'
 
 redis_conn = sm.connect_to_redis(db=SCHEDULER_RDB)
 scheduler = Scheduler(connection=redis_conn, interval=30)
@@ -99,13 +99,13 @@ class Reboot(Resource):
                 return {'reboot': 'in progress', 'message': 'Device is still rebooting.'}, 409
 
             if mode == "android":
-                logger.info(f'REBOOT: tguser {tgname}, id{device_id}, {serial}')
+                logger.info(f'REBOOT: {tgname}, id{device_id}')
                 adb_reboot_device(serial, device_id)
                 reboot_info_to_redis(tgname, device_id, serial)
-                return {'reboot': 'OK', 'message': 'Reboot is started.'}, 202
+                return {'reboot': 'OK', 'message': 'Reboot is started, wait 1 minute.'}, 200
 
             if mode == "modem":
-                logger.info(f'REBOOT: tguser {tgname}, id{device_id}, {serial}')
+                logger.info(f'REBOOT: {tgname}, id{device_id}')
                 adb_reboot_device(serial, device_id)
                 reboot_info_to_redis(tgname, device_id, serial)
                 # logger.debug(f'Scheduling: id{device_id}, task: {job_id}')
@@ -142,7 +142,10 @@ class DeviceStatus(Resource):
                 device = user_data.get('device')
                 device_id = user_data.get('id')
                 tgname = user_data.get('tgname')
-                logger.info(f"STATUS: {tgname}, id{device_id}({serial})")
+
+                user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=device_id)
+                
+                logger.info(f"STATUS: {user_log_credentials}")
 
             device_status = get_adb_device_status(serial, device_id)
 
@@ -181,7 +184,7 @@ class ChangeIP(Resource):
             last_ip_change_time = user_data.get('last_ip_change_time')
             current_time = datetime.now()
 
-            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
+            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id)
 
             if not serial:
                 logger.error(f"Serial NOT found in redis: id{id}, user {username}, serial: {serial}")
@@ -245,7 +248,7 @@ class AutoChangeIP(Resource):
             action = 'toggle_airplane'
             job_id = f"changeip_{serial}"
 
-            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
+            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id)
 
             if not serial:
                 logger.error("Serial number not found in user_data.")
@@ -604,7 +607,7 @@ class AddUserModem(Resource):
             id = user_data['id']
             serial = user_data['serial']
 
-            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
+            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id)
 
             #validating data
             # fields_to_validate = {
@@ -844,7 +847,7 @@ class UpdateUser(Resource):
             serial = redis_data.get('serial', '')
             username = redis_data.get('username', '')
 
-            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
+            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id)
             
             logger.info(f"UPDATE LOGOPASS: {user_log_credentials}")
 
@@ -878,7 +881,7 @@ class UpdateUser(Resource):
                         not cm.update_user_in_config(old_username, new_username, proxy_id):
                     raise Exception("Failed to update password")
                 
-                user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
+                user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id)
                 logger.info(f"UPDATE LOGOPASS SUCCESS: {user_log_credentials}")
                 return {"message": "Password updated successfully"}, 200
 
@@ -1088,7 +1091,7 @@ class ModemStatus(Resource):
             tgname = user_data.get('tgname')
             id = user_data.get('id')
 
-            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
+            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id)
 
             if not serial:
                 logger.error("Serial number not found in user data.")
@@ -1139,7 +1142,7 @@ class ModemUp(Resource):
             interface_name = f'id{id}'
             tgname = user_data.get('tgname')
 
-            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
+            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id)
 
             logger.info(f"SWITCH MODEM: {mode}: {user_log_credentials}")
 
@@ -1213,7 +1216,7 @@ class AirplaneStatus(Resource):
             id = user_data.get('id')
             tgname = user_data.get('tgname')
 
-            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
+            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id)
 
             if not serial_number:
                 logger.error(f"Serial number not found, id{id}")
@@ -1254,7 +1257,7 @@ class AirplaneOn(Resource):
             id = user_data.get('id')
             tgname = user_data.get('tgname')
 
-            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
+            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id)
 
             logger.debug(f"AIRPLANE ON: {user_log_credentials}")
 
@@ -1305,7 +1308,7 @@ class AirplaneOff(Resource):
             id = user_data.get('id')
             tgname = user_data.get('tgname')
 
-            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id, serial=serial)
+            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id)
 
             logger.debug(f"AIRPLANE OFF: id{id}({serial}), {device}")
 
