@@ -245,6 +245,7 @@ class AutoChangeIP(Resource):
             serial = user_data.get('serial')
             device_id = user_data.get('id')
             device_model = user_data.get('device')
+            tgname = user_data.get('tgname')
             action = 'toggle_airplane'
             job_id = f"changeip_{serial}"
 
