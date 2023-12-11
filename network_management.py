@@ -302,24 +302,24 @@ MODEM_HANDLERS = {
         'modem_off': lambda sn: modem_toggle_cmd(sn, 'none'),
         'modem_status': lambda sn: modem_get_status(sn, 'SM-A015F'),
         'toggle_airplane': lambda sn: airplane_toggle_cmd_su(sn, 'SM-A015F'),
-        'enable_airplane_mode_cmd_su': lambda sn: enable_airplane_mode_cmd_su(sn, 'SM-A015F'),
-        'disable_airplane_mode_cmd_su': lambda sn: disable_airplane_mode_cmd_su(sn, 'SM-A015F')
+        'enable_airplane_mode': lambda sn: enable_airplane_mode_cmd_su(sn, 'SM-A015F'),
+        'disable_airplane_mode': lambda sn: disable_airplane_mode_cmd_su(sn, 'SM-A015F')
     },
     'SM-A260G': {
         'modem_on': lambda sn: modem_toggle_coordinates_ON(sn, 'SM-A260G'),
         'modem_off': lambda sn: modem_toggle_coordinates_OFF(sn, 'SM-A260G'),
         'modem_status': lambda sn: modem_get_status(sn, 'SM-A260G'),
         'toggle_airplane': lambda sn: airplane_toggle_cmd_su(sn, 'SM-A260G'),
-        'enable_airplane_mode_cmd_su': lambda sn: enable_airplane_mode_cmd_su(sn, 'SM-A260G'),
-        'disable_airplane_mode_cmd_su': lambda sn: disable_airplane_mode_cmd_su(sn, 'SM-A260G')
+        'enable_airplane_mode': lambda sn: enable_airplane_mode_cmd_su(sn, 'SM-A260G'),
+        'disable_airplane_mode': lambda sn: disable_airplane_mode_cmd_su(sn, 'SM-A260G')
     },
     '5033D_RU': {
         'modem_on': lambda sn: modem_toggle_cmd(sn, 'rndis'),
         'modem_off': lambda sn: modem_toggle_cmd(sn, 'none'),
         'modem_status': lambda sn: modem_get_status(sn, '5033D_RU'),
         'toggle_airplane': lambda sn: airplane_toggle_cmd_su(sn, '5033D_RU'),
-        'enable_airplane_mode_cmd_su': lambda sn: enable_airplane_mode_cmd_su(sn, 'Pixel 2'),
-        'disable_airplane_mode_cmd_su': lambda sn: disable_airplane_mode_cmd_su(sn, 'Pixel 2')
+        'enable_airplane_mode': lambda sn: enable_airplane_mode_cmd_su(sn, 'Pixel 2'),
+        'disable_airplane_mode': lambda sn: disable_airplane_mode_cmd_su(sn, 'Pixel 2')
     },
     'Kingcomm C500': {
         'modem_on': lambda sn: modem_toggle_coordinates_ON(sn, 'Kingcomm C500'),
@@ -342,8 +342,8 @@ MODEM_HANDLERS = {
         'modem_off': lambda sn: modem_toggle_coordinates_OFF(sn, 'Alpha 5G'),
         'modem_status': lambda sn: modem_get_status(sn, 'Alpha 5G'),
         'toggle_airplane': lambda sn: airplane_toggle_coordinates(sn, 'Alpha 5G'),
-        'enable_airplane_mode_cmd_su': lambda sn: enable_airplane_mode_cmd_su(sn, 'Pixel 2'),
-        'disable_airplane_mode_cmd_su': lambda sn: disable_airplane_mode_cmd_su(sn, 'Pixel 2')
+        'enable_airplane_mode': lambda sn: enable_airplane_mode_cmd_su(sn, 'Pixel 2'),
+        'disable_airplane_mode': lambda sn: disable_airplane_mode_cmd_su(sn, 'Pixel 2')
     },
     'SM-J400F': {
         'modem_on': lambda sn: modem_toggle_coordinates_ON(sn, 'SM-J400F'),
@@ -366,16 +366,16 @@ MODEM_HANDLERS = {
         'modem_off': lambda sn: modem_toggle_cmd(sn, 'none'),
         'modem_status': lambda sn: modem_get_status(sn, 'msm8916_32_512'),
         'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'msm8916_32_512'),
-        'enable_airplane_mode_cmd': lambda sn: enable_airplane_mode_cmd(sn, 'msm8916_32_512'),
-        'disable_airplane_mode_cmd': lambda sn: disable_airplane_mode_cmd(sn, 'msm8916_32_512')
+        'enable_airplane_mode': lambda sn: enable_airplane_mode_cmd(sn, 'msm8916_32_512'),
+        'disable_airplane_mode': lambda sn: disable_airplane_mode_cmd(sn, 'msm8916_32_512')
     },
     'UFI': {
         'modem_on': lambda sn: modem_toggle_cmd(sn, 'rndis'),
         'modem_off': lambda sn: modem_toggle_cmd(sn, 'none'),
         'modem_status': lambda sn: modem_get_status(sn, 'UFI'),
         'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'UFI'),
-        'enable_airplane_mode_cmd': lambda sn: enable_airplane_mode_cmd(sn, 'UFI'),
-        'disable_airplane_mode_cmd': lambda sn: disable_airplane_mode_cmd(sn, 'UFI')
+        'enable_airplane_mode': lambda sn: enable_airplane_mode_cmd(sn, 'UFI'),
+        'disable_airplane_mode': lambda sn: disable_airplane_mode_cmd(sn, 'UFI')
     }
 }
 
