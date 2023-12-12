@@ -908,7 +908,7 @@ class ReplaceAndroid(Resource):
             return {"message": "Internal server error"}, 500
 
         try:
-            logger.info("REPLACE ANDROID")
+            logger.debug("REPLACE ANDROID")
 
             required_fields = ['token', 'new_id', 'new_serial', 'new_device', 'new_parent_ip']
             
@@ -948,7 +948,7 @@ class ReplaceAndroid(Resource):
                 logger.error(f"IP is NOT replaced: TOKEN {token}, TGNAME {tgname}, OLD IP {old_parent_ip}")
                 return {"message": f"IP is NOT replaced: TOKEN {token}, TGNAME {tgname}, OLD IP {old_parent_ip}"}, 404
 
-            logger.info(f"IP in CONFIG is replaced: {old_parent_ip} --> {new_parent_ip}")
+            logger.debug(f"IP in CONFIG is replaced: {old_parent_ip} --> {new_parent_ip}")
 
             pipe.hset(token, 'parent_ip', new_parent_ip)
             pipe.hset(token, 'device', new_device)
@@ -975,7 +975,7 @@ class ReplaceModem(Resource):
             return {"message": "Internal server error"}, 500
 
         try:
-            logger.info("REPLACE MODEM")
+            logger.debug("REPLACE MODEM")
 
             required_fields = ['token', 'new_id', 'new_serial', 'new_device']
             
@@ -1008,7 +1008,7 @@ class ReplaceModem(Resource):
             if not cm.replace_modem_in_config(old_id, new_id, username):
                 logger.error(f"ID is NOT replaced: {old_id}")
                 return {"message": f"IP is NOT replaced: {old_id}"}, 404
-            logger.info(f"ID is replaced: id{old_id} --> id{new_id}")
+            logger.debug(f"ID is replaced: id{old_id} --> id{new_id}")
 
             pipe.hset(token, 'id', new_id)
             pipe.hset(token, 'serial', new_serial)

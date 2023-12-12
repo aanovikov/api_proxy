@@ -682,7 +682,7 @@ def android_ip_exists_in_config(old_ip):
 
 def replace_android_in_config(old_ip, new_ip, old_id, new_id, username):
     try:
-        logger.info(f"Changing ID and IP in config: old_ip: {old_ip}, new_ip: {new_ip}, old_id: {old_id}, new_id: {new_id}")
+        logger.debug(f"Changing ID and IP in config: old_ip: {old_ip}, new_ip: {new_ip}, old_id: {old_id}, new_id: {new_id}")
         
         new_lines = []
         inside_user_block = False
@@ -709,8 +709,6 @@ def replace_android_in_config(old_ip, new_ip, old_id, new_id, username):
 
         with open(CONFIG_PATH, "w") as f:
             f.writelines(new_lines)
-
-        logger.info("Configuration updated successfully")
         return True
 
     except Exception as e:
@@ -804,7 +802,7 @@ def modem_id_exists_in_config(proxy_id, username):
 
 def replace_modem_in_config(old_id, new_id, username):
     try:
-        logger.info(f"Changing ID in config: old_id: {old_id}, new_id: {new_id}")
+        logger.debug(f"Changing ID in config: old_id: {old_id}, new_id: {new_id}")
 
         new_lines = []
         inside_user_block = False
@@ -831,8 +829,6 @@ def replace_modem_in_config(old_id, new_id, username):
                 
         with open(CONFIG_PATH, "w") as f:
             f.writelines(new_lines)
-
-        logger.info("ID successfully changed in configuration")
         return True
 
     except Exception as e:
