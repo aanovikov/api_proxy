@@ -1071,10 +1071,10 @@ class ModemStatus(Resource):
     @ts.requires_role("admin")
     def post(self, admin_token):
         try:
-            logger.info("CHECK MODEM STATUS.")
+            logger.debug("CHECK MODEM STATUS.")
 
             data = request.json
-            logger.info(f"Received data: {data}")  # Логирование данных запроса
+            logger.debug(f"Received data: {data}")  # Логирование данных запроса
             if data is None:
                 return {"message": "Invalid request: JSON body required"}, 400
             
@@ -1084,7 +1084,7 @@ class ModemStatus(Resource):
             if user_data is None:
                 return {'error': 'Proxy has expired or the token was not found'}, 404
 
-            logger.info(f"User data from Redis: {user_data}")  # Логирование данных пользователя
+            logger.debug(f"User data from Redis: {user_data}")  # Логирование данных пользователя
             serial = user_data.get('serial')
             device_model = user_data.get('device')
             mode = user_data.get('mode')
@@ -1103,7 +1103,7 @@ class ModemStatus(Resource):
                 logger.error("Invalid device model provided. Use a correct 'device' field.")
                 return {"message": "Invalid device model provided. Use a correct 'device' field."}, 400
 
-            logger.info(f"Handler for device model {device_model}: {handler}, Serial: {serial}")  # Подтверждение наличия serial
+            logger.debug(f"Handler for device model {device_model}: {handler}, Serial: {serial}")  # Подтверждение наличия serial
             status = handler(serial) if handler else None
 
             if status == "device_not_found":
@@ -1145,7 +1145,7 @@ class ModemUp(Resource):
 
             user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id)
 
-            logger.info(f"SWITCH MODEM: {mode}: {user_log_credentials}")
+            logger.debug(f"MODEM UP: {user_log_credentials}: {mode}")
 
             if not all([serial, device_model, mode]):
                 return {"message": "Missing required fields"}, 400
