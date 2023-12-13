@@ -1113,7 +1113,7 @@ class ModemStatus(Resource):
                 logger.error("Device timed out, possibly it has lost connection")
                 return {"message": "Device timed out, possibly it has lost connection"}, 500
 
-            logger.info(f"MODEM STATUS: {user_log_credentials}: {status}")
+            logger.info(f"MODEM STATUS is {status}: {user_log_credentials}")
             return {"message": status}, 200
 
         except Exception as e:
@@ -1226,10 +1226,10 @@ class AirplaneStatus(Resource):
             status = check_airplane(serial_number)
 
             if status == 1:
-                logger.info(f"AIRPLANE ON: {user_log_credentials}")
+                logger.info(f"AIRPLANE is ON: {user_log_credentials}")
                 return {"message": "Airplane is ON"}, 200
             elif status == 0:
-                logger.info(f"AIRPLANE OFF: {user_log_credentials}")
+                logger.info(f"AIRPLANE is OFF: {user_log_credentials}")
                 return {"message": "Airplane is OFF"}, 200
             else:
                 logger.error(f'id{id}: Error or unknown status')
@@ -1280,7 +1280,7 @@ class AirplaneOn(Resource):
                 # airplane_toggle_cmd_su(serial, device)
             
             if airplane_on_result:
-                logger.info(f"AIRPLANE ON: {user_log_credentials}")
+                logger.info(f"AIRPLANE ON DONE: {user_log_credentials}")
                 return {'status': 'success', 'message': 'Airplane switched ON'}, 200
             else:
                 logger.error(f"Failed to turn ON airplane: id{id}({serial}), {device}")
