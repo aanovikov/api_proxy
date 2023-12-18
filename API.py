@@ -9,8 +9,8 @@ from logging.handlers import TimedRotatingFileHandler
 from ipaddress import ip_address, AddressValueError
 from dotenv import load_dotenv
 from device_management import adb_reboot_device, get_adb_device_status, os_boot_status
-from network_management import dispatcher, MODEM_HANDLERS, wait_for_ip, airplane_toggle_coordinates, TETHER_SETTINGS, check_airplane
-from settings import TETHERING_COORDINATES, ALLOWED_PROTOCOLS, ROOT
+from network_management import dispatcher, MODEM_HANDLERS, wait_for_ip, airplane_toggle_coordinates, TETHER_SETTINGS, check_airplane, wg_switcher, ping, get_wg_ip
+from settings import TETHERING_COORDINATES, ALLOWED_PROTOCOLS, ROOT, WG_COORDINATES
 import tools as ts
 import storage_management as sm
 import conf_management as cm
@@ -35,7 +35,9 @@ CONFIG_PATH = os.getenv('CONFIG_PATH')
 MODEM_UP_TIME = 1
 CHANGE_IP_TIMEOUT = 30
 ALLOWED_INTERVAL = 60
-REBOOT_RDB = 2
+BUSY_RDB = 2
+ACT_PUT = 1
+ACT_DEL = 0
 EXPIRY_TIME = 60
 SCHEDULER_RDB = os.getenv('SCHEDULER_RDB')
 
@@ -46,33 +48,11 @@ redis_conn = sm.connect_to_redis(db=SCHEDULER_RDB)
 scheduler = Scheduler(connection=redis_conn, interval=30)
 logger.debug(redis_conn)
 
-def reboot_info_to_redis(tgname, id, serial, expire=EXPIRY_TIME, db=REBOOT_RDB):
-    try:
-        r = sm.connect_to_redis(db)
-        if r is None:
-            logger.error("Failed to connect to Redis. Aborting operation.")
-            return False
-
-        r.setex(serial, expire, '')
-
-        logger.debug(f"Stored reboot info: user {tgname}, id{id}, {serial}")
-        return True
-        
-    except redis.ConnectionError:
-        logger.error("Could not connect to Redis reboot DB")
-        return False
-    except redis.TimeoutError:
-        logger.error("Redis operation timed out")
-        return False
-    except Exception as e:
-        logger.error(f"An unknown error occurred while communicating with Redis: {e}")
-        return False
-
 def check_job_exists(scheduler, job_id):
-                for job in scheduler.get_jobs():
-                    if job.id == job_id:
-                        return True  # Job found
-                return False  # Job not found
+    for job in scheduler.get_jobs():
+        if job.id == job_id:
+            return True  # Job found
+    return False  # Job not found
 
 class Reboot(Resource):
     #@ts.requires_role("user")
@@ -101,13 +81,13 @@ class Reboot(Resource):
             if mode == "android":
                 logger.info(f'REBOOT: {tgname}, id{device_id}')
                 adb_reboot_device(serial, device_id)
-                reboot_info_to_redis(tgname, device_id, serial)
+                sm.manage_busy_info_in_redis(serial, ACT_PUT)
                 return {'reboot': 'OK', 'message': 'Reboot is started, wait 1 minute.'}, 200
 
             if mode == "modem":
                 logger.info(f'REBOOT: {tgname}, id{device_id}')
                 adb_reboot_device(serial, device_id)
-                reboot_info_to_redis(tgname, device_id, serial)
+                sm.manage_busy_info_in_redis(serial, ACT_PUT)
                 # logger.debug(f'Scheduling: id{device_id}, task: {job_id}')
                 # scheduler.enqueue_in(timedelta(minutes=MODEM_UP_TIME), dispatcher, device, serial, action, job_id=job_id)
                 # logger.info(f'CREATED JOB: id{device_id}, {job_id}, switch on modem in {MODEM_UP_TIME} min.')
@@ -190,6 +170,14 @@ class ChangeIP(Resource):
                 logger.error(f"Serial NOT found in redis: id{id}, user {username}, serial: {serial}")
                 return {'error': 'Serial not found'}, 400
             
+            busy_status = sm.is_device_busy(serial, BUSY_RDB)
+            if busy_status is None:
+                logger.error(f"Error cheking BUSY status: {serial}, {user_log_credentials}")
+
+            if busy_status:
+                logger.info(f"Device is BUSY: {user_log_credentials}")
+                return {'message': 'Device is busy, please try again later'}, 202  # HTTP 202 Accepted
+
             # Если last_ip_change_time не установлен, разрешаем смену IP
             if last_ip_change_time is None:
                 logger.warning("No IP change recorded previously, proceeding with IP change.")
@@ -204,24 +192,26 @@ class ChangeIP(Resource):
                     logger.warning(f"IP CHANGE LIMIT REACHED: {user_log_credentials}, time left: {time_left} sec.")
                     return {'error': f'You can only change IP once every {CHANGE_IP_TIMEOUT} seconds. Try again in {time_left} seconds.'}, 429
                 user_data['last_ip_change_time'] = current_time.timestamp()
-                
+
             # Check if device has ROOT
             if device not in ROOT:
                 logger.debug(f"Airplane on\off via TOUCH: {tgname}, {device}, id{id}, {username}, {serial}")
+
                 if 'toggle_airplane' in MODEM_HANDLERS[device]:
                     airplane_toggle_result = MODEM_HANDLERS[device]['toggle_airplane'](serial)
                 else:
                     logger.error(f"No 'toggle_airplane' for device {device}.")
                     return {'error': 'Operation not supported for this device'}, 400
+
             else:
                 logger.debug(f"Airplane on\off via CMD: {tgname}, {device}, id{id}, {username}, {serial}")
                 airplane_toggle_result = MODEM_HANDLERS[device]['toggle_airplane'](serial)
-                # airplane_toggle_cmd_su(serial, device)
             
             if airplane_toggle_result:
                 fields_to_update = {'last_ip_change_time': current_time.timestamp()}
                 sm.update_data_in_redis(token, fields_to_update)
                 logger.debug(f"Updated data for token: {token} with the following fields: {fields_to_update}")
+
                 logger.info(f"IP CHANGE SUCCESS: {user_log_credentials}")
                 return {'status': 'success', 'message': 'IP was changed'}, 200
             else:
@@ -1149,6 +1139,14 @@ class ModemUp(Resource):
 
             if not all([serial, device_model, mode]):
                 return {"message": "Missing required fields"}, 400
+            
+            busy_status = sm.is_device_busy(serial, BUSY_RDB)
+            if busy_status is None:
+                logger.error(f"Error cheking BUSY status: {serial}, {user_log_credentials}")
+
+            if busy_status:
+                logger.info(f"Device is BUSY: {user_log_credentials}")
+                return {'message': 'Device is busy, please try again later'}, 202  # HTTP 202 Accepted
 
             status_handler = MODEM_HANDLERS.get(device_model, {}).get('modem_status')
             status = status_handler(serial) if status_handler else None
@@ -1265,7 +1263,15 @@ class AirplaneOn(Resource):
             if not serial:
                 logger.error(f"Serial NOT found in redis: id{id}({serial}), {device}")
                 return {'error': 'Serial not found'}, 400
-                
+            
+            busy_status = sm.is_device_busy(serial, BUSY_RDB)
+            if busy_status is None:
+                logger.error(f"Error cheking BUSY status: {serial}, {user_log_credentials}")
+
+            if busy_status:
+                logger.info(f"Device is BUSY: {user_log_credentials}")
+                return {'message': 'Device is busy, please try again later'}, 202  # HTTP 202 Accepted
+
             # Check if device has ROOT
             if device not in ROOT:
                 logger.debug(f"Airplane ON via TOUCH: id{id}({serial}), {device}")
@@ -1316,7 +1322,15 @@ class AirplaneOff(Resource):
             if not serial:
                 logger.error(f"Serial NOT found in redis: id{id}({serial}), {device}")
                 return {'error': 'Serial not found'}, 400
-                
+
+            busy_status = sm.is_device_busy(serial, BUSY_RDB)
+            if busy_status is None:
+                logger.error(f"Error cheking BUSY status: {serial}, {user_log_credentials}")
+
+            if busy_status:
+                logger.info(f"Device is BUSY: {user_log_credentials}")
+                return {'message': 'Device is busy, please try again later'}, 202  # HTTP 202 Accepted
+
             # Check if device has ROOT
             if device not in ROOT:
                 logger.debug(f"Airplane OFF via TOUCH: id{id}({serial}), {device}")
@@ -1341,6 +1355,135 @@ class AirplaneOff(Resource):
             logger.error(f"An error occurred: {e}")
             return {'status': 'failure', 'message': 'An error occurred while turn OFF airplane'}, 500
 
+class WGstatus(Resource):
+    @ts.requires_role("admin")
+    def post(self, admin_token):
+        try:
+            logger.debug("CHECK WG STATUS.")
+
+            data = request.json
+            logger.debug(f"Received data: {data}")
+            if data is None:
+                return {"message": "Invalid request: JSON body required"}, 400
+
+            token = data.get('token')
+
+            user_data = sm.get_data_from_redis(token)
+            if user_data is None:
+                return {'error': 'Proxy has expired or the token was not found'}, 404
+
+            logger.debug(f"User data from Redis: {user_data}")
+            serial = user_data.get('serial')
+            device_model = user_data.get('device')
+            mode = user_data.get('mode')
+            username = user_data.get('username')
+            tgname = user_data.get('tgname')
+            id = user_data.get('id')
+
+            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id)
+
+            if not serial:
+                logger.error("Serial number not found in user data.")
+                return {'error': 'Serial number not found'}, 400
+
+            try:
+                # checking switcher status in the app
+                get_wg_ip_result = get_wg_ip(serial, id)
+                logger.debug(f"get_wg_ip result: {get_wg_ip_result}")
+
+                if isinstance(get_wg_ip_result, bool):
+                    if get_wg_ip_result:
+                        wg_switcher_status = 'ON'
+                    else:
+                        wg_switcher_status = 'OFF'
+                        wg_connection_status = 'disconnected'
+                        logger.info(f"WG STATUS: {wg_switcher_status}, {wg_connection_status}: {user_log_credentials}")
+                        return {"switcher": wg_switcher_status, "status": wg_connection_status}, 200
+
+                else:
+                    wg_switcher_status = 'unknown'
+                    wg_connection_status = get_wg_ip_result
+                    return {"switcher": wg_switcher_status, "status": get_wg_ip_result}, 500
+            
+            except Exception as e:
+                logger.error(f"IP checking error: {e}")
+                return {"message": str(e)}, 500
+            
+
+            # Checking WireGuard via ping
+            try:
+                ping_result = ping(serial, id)
+                logger.debug(f"Ping result: {ping_result}")
+                
+                if ping_result:
+                    wg_connection_status = 'connected'
+                elif not ping_result:
+                    wg_connection_status = 'disconnected'
+                else:
+                    wg_connection_status = ping_result
+
+            except Exception as e:
+                logger.error(f"Ping checking error: {e}")
+                return {"message": str(e)}, 500
+
+            logger.info(f"WG STATUS: {wg_switcher_status}, {wg_connection_status}: {user_log_credentials}")
+            return {"switcher": wg_switcher_status, "status": wg_connection_status}, 200
+
+        except Exception as e:
+            logger.exception("An error occurred")
+            return {"message": f"An error occurred: {str(e)}"}, 500
+
+class WGswitcher(Resource):
+    @ts.requires_role("admin")
+    def post(self, admin_token):
+        try:
+            data = request.json
+            if data is None:
+                return {"message": "Invalid request: JSON body required"}, 400
+            
+            token = data.get('token')
+
+            user_data = sm.get_data_from_redis(token)
+            if user_data is None:
+                return {'error': 'Proxy has expired or the token was not found'}, 404
+
+            serial = user_data.get('serial')
+            device = user_data.get('device')
+            id = user_data.get('id')
+            tgname = user_data.get('tgname')
+
+            user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id)
+
+            if not serial:
+                logger.error(f"Serial NOT found in redis: id{id}({serial}), {device}")
+                return {'error': 'Serial not found'}, 400
+
+            busy_status = sm.is_device_busy(serial, BUSY_RDB)
+            if busy_status is None:
+                logger.error(f"Error cheking BUSY status: {serial}, {user_log_credentials}")
+
+            if busy_status:
+                logger.info(f"Device is BUSY: {user_log_credentials}")
+                return {'message': 'Device is busy, please try again later'}, 202  # HTTP 202 Accepted
+                    
+            logger.debug(f"WG SWITCHING: {user_log_credentials}, {device}")
+                
+            if device not in MODEM_HANDLERS or 'wg_switcher' not in MODEM_HANDLERS[device]:
+                logger.error(f"No WG switcher handler for device: {device}")
+                return {'error': 'WG switcher handler not found for device'}, 400
+
+            wg_switcher_result = MODEM_HANDLERS[device]['wg_switcher'](serial)
+
+            if isinstance(wg_switcher_result, bool) and wg_switcher_result:
+                logger.info(f"WG SWITCHING SUCCESS: {user_log_credentials}")
+                return {'status': 'success'}, 200
+            else:
+                return {'status': 'error', 'message': wg_switcher_result}, 500
+
+        except Exception as e:
+            logger.error(f"An error occurred: {e}")
+            return {'status': 'failure', 'message': str(e)}, 500
+
 #resources
 api.add_resource(Reboot, '/api/reboot/<string:token>') #user role
 api.add_resource(DeviceStatus, '/api/device_status/<string:token>') #user role
@@ -1361,6 +1504,8 @@ api.add_resource(ProxyCount, '/api/proxycount/<string:token>') #admin role
 api.add_resource(AirplaneStatus, '/api/airplanestatus/<string:token>') #admin role
 api.add_resource(AirplaneOn, '/api/airplane_on/<string:token>') #admin role
 api.add_resource(AirplaneOff, '/api/airplane_off/<string:token>') #admin role
+api.add_resource(WGstatus, '/api/wg_status/<string:token>') #admin role
+api.add_resource(WGswitcher, '/api/wg_switcher/<string:token>') #admin role
 
 if __name__ == '__main__':
     app.run(debug=True)

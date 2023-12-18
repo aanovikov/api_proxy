@@ -7,7 +7,8 @@ from dotenv import load_dotenv
 import os
 import time
 import re
-from settings import TETHERING_COORDINATES, AIRPLANE_MODE_SETTINGS
+from settings import TETHERING_COORDINATES, AIRPLANE_MODE_SETTINGS, WG_COORDINATES
+from storage_management import manage_busy_info_in_redis
 
 logger = logging.getLogger()
 
@@ -25,7 +26,13 @@ ACTIVE_WINDOW = "adb -s {} shell dumpsys window windows | grep -E 'mCurrentFocus
 ACTIVE_WINDOW_ANDROID_10 = "'adb -s {} shell dumpsys window displays | grep -E 'mCurrentFocus'"
 AIRPLANE_STATUS = "adb -s {} shell settings get global airplane_mode_on"
 SCREEN_INPUT = "adb -s {} shell input tap {} {}"
-RNDIS_STATUS="adb -s {} shell ip a | grep -E 'usb|rndis'"
+RNDIS_STATUS = "adb -s {} shell ip a | grep -E 'usb|rndis'"
+WG_OPEN = "adb -s {} shell am start -n com.wireguard.android/com.wireguard.android.activity.MainActivity"
+WG_STATUS = "adb -s {} shell ip a | grep 10.55.55"
+PING = "adb -s {} shell 'ping -c4 10.55.55.1'"
+
+ACT_PUT = 1
+ACT_DEL = 0
 
 def dispatcher(device_model, serial, action):
     func = MODEM_HANDLERS.get(device_model, {}).get(action)
@@ -73,6 +80,9 @@ def modem_toggle_coordinates_ON(serial, device_model):
         else:
             match = re.search(r'(rndis0|usb0):.*state (DOWN)', output)
             interface_down = bool(match)
+
+        #put info about change ip action to prevent interruption, like a lock
+        manage_busy_info_in_redis(serial, ACT_PUT)
 
         if interface_down:
             # If modem DOWN - switch ON tethering
@@ -136,6 +146,10 @@ def modem_toggle_coordinates_ON(serial, device_model):
         logger.error(f"Command failed with error: {e}, serial: {serial}, type: {device_model}")
     except Exception as e:
         logger.error(f"An unexpected error occurred: {e}, serial: {serial}, type: {device_model}")
+    
+    finally:
+        #delete info about change ip action to prevent interruption, like a unlock
+        manage_busy_info_in_redis(serial, ACT_DEL)
 
 def modem_toggle_coordinates_OFF(serial, device_model):
     try:
@@ -167,6 +181,9 @@ def modem_toggle_coordinates_OFF(serial, device_model):
         result = subprocess.run(rndis_status, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         output = result.stdout.decode()
         logger.debug(f'RESULT: {output}')
+
+        #put info about change ip action to prevent interruption, like a lock
+        manage_busy_info_in_redis(serial, ACT_PUT)
 
         # If the output is empty, we assume the interface is DOWN (which is an error if we want to switch off).
         match = None
@@ -239,6 +256,10 @@ def modem_toggle_coordinates_OFF(serial, device_model):
     except Exception as e:
         logger.error(f"An unexpected error occurred: {e}, serial: {serial}, type: {device_model}")
         return False
+    
+    finally:
+        #delete info about change ip action to prevent interruption, like a unlock
+        manage_busy_info_in_redis(serial, ACT_DEL)
 
 def modem_toggle_cmd(serial, mode):
     try:
@@ -303,7 +324,8 @@ MODEM_HANDLERS = {
         'modem_status': lambda sn: modem_get_status(sn, 'SM-A015F'),
         'toggle_airplane': lambda sn: airplane_toggle_cmd_su(sn, 'SM-A015F'),
         'enable_airplane_mode': lambda sn: enable_airplane_mode_cmd_su(sn, 'SM-A015F'),
-        'disable_airplane_mode': lambda sn: disable_airplane_mode_cmd_su(sn, 'SM-A015F')
+        'disable_airplane_mode': lambda sn: disable_airplane_mode_cmd_su(sn, 'SM-A015F'),
+        'wg_switcher': lambda sn: wg_switcher(sn, 'SM-A015F')
     },
     'SM-A260G': {
         'modem_on': lambda sn: modem_toggle_coordinates_ON(sn, 'SM-A260G'),
@@ -311,7 +333,8 @@ MODEM_HANDLERS = {
         'modem_status': lambda sn: modem_get_status(sn, 'SM-A260G'),
         'toggle_airplane': lambda sn: airplane_toggle_cmd_su(sn, 'SM-A260G'),
         'enable_airplane_mode': lambda sn: enable_airplane_mode_cmd_su(sn, 'SM-A260G'),
-        'disable_airplane_mode': lambda sn: disable_airplane_mode_cmd_su(sn, 'SM-A260G')
+        'disable_airplane_mode': lambda sn: disable_airplane_mode_cmd_su(sn, 'SM-A260G'),
+        'wg_switcher': lambda sn: wg_switcher(sn, 'SM-A260G')
     },
     '5033D_RU': {
         'modem_on': lambda sn: modem_toggle_cmd(sn, 'rndis'),
@@ -327,7 +350,8 @@ MODEM_HANDLERS = {
         'modem_status': lambda sn: modem_get_status(sn, 'Kingcomm C500'),
         'toggle_airplane': lambda sn: airplane_toggle_coordinates(sn, 'Kingcomm C500'),
         'enable_airplane_mode': lambda sn: enable_airplane_mode(sn, 'Kingcomm C500'),
-        'disable_airplane_mode': lambda sn: disable_airplane_mode(sn, 'Kingcomm C500')
+        'disable_airplane_mode': lambda sn: disable_airplane_mode(sn, 'Kingcomm C500'),
+        'wg_switcher': lambda sn: wg_switcher(sn, 'Kingcomm C500')
     },
     'J20': {
         'modem_on': lambda sn: modem_toggle_cmd(sn, 'rndis'),
@@ -335,15 +359,17 @@ MODEM_HANDLERS = {
         'modem_status': lambda sn: modem_get_status(sn, 'J20'),
         'toggle_airplane': lambda sn: airplane_toggle_cmd_su(sn, 'J20'),
         'enable_airplane_mode': lambda sn: enable_airplane_mode(sn, 'J20'),
-        'disable_airplane_mode': lambda sn: disable_airplane_mode(sn, 'J20')
+        'disable_airplane_mode': lambda sn: disable_airplane_mode(sn, 'J20'),
+        'wg_switcher': lambda sn: wg_switcher(sn, 'J20')
     },
     'Alpha 5G': {
         'modem_on': lambda sn: modem_toggle_coordinates_ON(sn, 'Alpha 5G'),
         'modem_off': lambda sn: modem_toggle_coordinates_OFF(sn, 'Alpha 5G'),
         'modem_status': lambda sn: modem_get_status(sn, 'Alpha 5G'),
         'toggle_airplane': lambda sn: airplane_toggle_coordinates(sn, 'Alpha 5G'),
-        'enable_airplane_mode': lambda sn: enable_airplane_mode_cmd_su(sn, 'Pixel 2'),
-        'disable_airplane_mode': lambda sn: disable_airplane_mode_cmd_su(sn, 'Pixel 2')
+        'enable_airplane_mode': lambda sn: enable_airplane_mode(sn, 'Alpha 5G'),
+        'disable_airplane_mode': lambda sn: disable_airplane_mode(sn, 'Alpha 5G'),
+        'wg_switcher': lambda sn: wg_switcher(sn, 'Alpha 5G')
     },
     'SM-J400F': {
         'modem_on': lambda sn: modem_toggle_coordinates_ON(sn, 'SM-J400F'),
@@ -351,7 +377,8 @@ MODEM_HANDLERS = {
         'modem_status': lambda sn: modem_get_status(sn, 'SM-J400F'),
         'toggle_airplane': lambda sn: airplane_toggle_coordinates(sn, 'SM-J400F'),
         'enable_airplane_mode': lambda sn: enable_airplane_mode(sn, 'SM-J400F'),
-        'disable_airplane_mode': lambda sn: disable_airplane_mode(sn, 'SM-J400F')
+        'disable_airplane_mode': lambda sn: disable_airplane_mode(sn, 'SM-J400F'),
+        'wg_switcher': lambda sn: wg_switcher(sn, 'SM-J400F')
     },
     'Pixel 2': {
         'modem_on': lambda sn: modem_toggle_coordinates_ON(sn, 'Pixel 2'),
@@ -359,7 +386,8 @@ MODEM_HANDLERS = {
         'modem_status': lambda sn: modem_get_status(sn, 'Pixel 2'),
         'toggle_airplane': lambda sn: airplane_toggle_coordinates(sn, 'Pixel 2'),
         'enable_airplane_mode': lambda sn: enable_airplane_mode(sn, 'Pixel 2'),
-        'disable_airplane_mode': lambda sn: disable_airplane_mode(sn, 'Pixel 2')
+        'disable_airplane_mode': lambda sn: disable_airplane_mode(sn, 'Pixel 2'),
+        'wg_switcher': lambda sn: wg_switcher(sn, 'Pixel 2')
     },
     'msm8916_32_512': {
         'modem_on': lambda sn: modem_toggle_cmd(sn, 'rndis'),
@@ -614,6 +642,9 @@ def airplane_toggle_coordinates(serial, device_model):
         screen_input_command = SCREEN_INPUT.format(serial, x, y)
         status_airplane = AIRPLANE_STATUS.format(serial)
 
+        #put info about change ip action to prevent interruption, like a lock
+        manage_busy_info_in_redis(serial, ACT_PUT)
+
         result = subprocess.run(status_display, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         is_display_on = 'state=ON' in result.stdout.decode()
 
@@ -696,6 +727,10 @@ def airplane_toggle_coordinates(serial, device_model):
         logger.error(f"An unexpected error occurred: {e}, serial: {serial}")
         return False
 
+    finally:
+        #delete info about change ip action to prevent interruption, like a unlock
+        manage_busy_info_in_redis(serial, ACT_DEL)
+
 def get_airplane_mode_coordinates(serial, device_model):
     if AIRPLANE_MODE_SETTINGS is None:
         logger.error(f"AIRPLANE_MODE_SETTINGS is not defined, serial: {serial}, type: {device_model}")
@@ -724,7 +759,11 @@ def enable_airplane_mode(serial, device_model):
         active_window_command = ACTIVE_WINDOW.format(serial)
         screen_input_command = SCREEN_INPUT.format(serial, x, y)
         status_airplane = AIRPLANE_STATUS.format(serial)
+        
+        #put info about change ip action to prevent interruption, like a lock
+        manage_busy_info_in_redis(serial, ACT_PUT)
 
+        #wake up display and check it
         result = subprocess.run(status_display, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         is_display_on = 'state=ON' in result.stdout.decode()
 
@@ -788,6 +827,10 @@ def enable_airplane_mode(serial, device_model):
     except Exception as e:
         logger.error(f"An unexpected error occurred: {e}, serial: {serial}")
         return False
+    
+    finally:
+        #delete info about change ip action to prevent interruption, like a unlock
+        manage_busy_info_in_redis(serial, ACT_DEL)
 
 def disable_airplane_mode(serial, device_model):
     try:
@@ -804,6 +847,9 @@ def disable_airplane_mode(serial, device_model):
         active_window_command = ACTIVE_WINDOW.format(serial)
         screen_input_command = SCREEN_INPUT.format(serial, x, y)
         status_airplane = AIRPLANE_STATUS.format(serial)
+
+        #put info about change ip action to prevent interruption, like a lock
+        manage_busy_info_in_redis(serial, ACT_PUT)
 
         result = subprocess.run(status_display, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         is_display_on = 'state=ON' in result.stdout.decode()
@@ -864,6 +910,10 @@ def disable_airplane_mode(serial, device_model):
     except Exception as e:
         logger.error(f"An unexpected error occurred: {e}, serial: {serial}")
         return False
+    
+    finally:
+        #delete info about change ip action to prevent interruption, like a unlock
+        manage_busy_info_in_redis(serial, ACT_DEL)
 
 def toggle_wifi(serial, action, delay=1, max_retries=10):
     try:
@@ -953,3 +1003,168 @@ def check_rndis_iface(device_id, serial):
     except Exception as e:
         logger.error(f"An unexpected error occurred: id{device_id}, serial: {serial}: {e}")
         return False
+
+def handle_adb_errors(stderr_output, device_id, serial):
+    if "device '{}' not found".format(serial) in stderr_output:
+        error_message = f"error: device '{serial}' not found"
+    elif 'offline' in stderr_output:
+        error_message = "ADB device offline"
+    elif 'unauthorized' in stderr_output:
+        error_message = "ADB unauthorized"
+    else:
+        error_message = "General ADB error"
+
+    logger.error(f"{error_message}: {device_id}")
+    return error_message
+
+def get_wg_ip(serial, device_id):
+    try:
+        wg_status = WG_STATUS.format(serial)
+        wg_status_result = subprocess.run(wg_status, shell=True, capture_output=True, text=True, timeout=10)
+
+        if wg_status_result.stderr.strip():
+            return handle_adb_errors(wg_status_result.stderr.strip(), device_id, serial)
+
+        if not wg_status_result.stdout.strip():
+            logger.debug(f'WG result: {wg_status_result}')
+            logger.error(f"No output, seems WG disconnected: {device_id}")
+            return False
+
+        vpn_ip = re.search(r'10\.55\.55\.\d+', wg_status_result.stdout)
+        if vpn_ip:
+            logger.debug(f'WG result: {wg_status_result}')
+            return True
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error executing command: {device_id}: {e}")
+        raise Exception("Error executing WG status command")
+    
+    except subprocess.TimeoutExpired:
+        logger.error(f'Timeout executing adb ping: {device_id} ({timeout} seconds)')
+        return 'TIMEOUT adb ping'
+
+    except subprocess.SubprocessError as e:
+        logger.error(f'ADB connection error: {device_id}: {e}')
+        return 'ERROR ADB'
+
+def ping(serial, device_id, timeout=15):
+    try:
+        ping_command = PING.format(serial)
+        ping_command_result = subprocess.run(ping_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        output = ping_command_result.stdout.decode()
+        logger.debug(f"Ping output: {device_id}: {output}")
+
+        if ping_command_result.stderr.strip():
+            return handle_adb_errors(ping_command_result.stderr.strip(), device_id, serial)
+
+        match = re.search(r'\d+%\s+packet\s+loss', output)
+        if match:
+            packet_loss = int(match.group().split('%')[0])
+            logger.info(f"id{device_id}: {packet_loss}% packets loss")
+            if packet_loss < 100:
+                return True
+            else:
+                return False
+        else:
+            logger.warning(f"Unable to determine packet loss: {device_id}")
+            return 'Unknown status'
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error executing command: {device_id}: {e}")
+        raise Exception("Error executing WG status command")
+        
+    except subprocess.TimeoutExpired:
+        logger.error(f'Timeout executing adb ping: {device_id} ({timeout} seconds)')
+        return 'TIMEOUT adb ping'
+
+    except subprocess.SubprocessError as e:
+        logger.error(f'ADB connection error: {device_id}: {e}')
+        return 'ERROR ADB'
+
+def wg_switcher(serial, device_model, device_id='unknown', timeout=15):
+    try:
+        coordinates = WG_COORDINATES.get(device_model)
+        if coordinates is None:
+            logger.error(f"No coordinates found for serial: {serial}")
+            return False
+
+        x, y = coordinates
+
+        wakeup_command = WAKEUP_DISPLAY.format(serial)
+        go_back = BACK.format(serial)
+        status_display = DISPLAY_STATUS.format(serial)
+        open_settings_command = WG_OPEN.format(serial)
+        screen_input_command = SCREEN_INPUT.format(serial, x, y)
+
+        logger.debug(f'params: {serial}, {device_model}, {device_id}, screen_input: {screen_input_command}')
+
+        # Wake up display and check its status
+        result = subprocess.run(status_display, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        is_display_on = 'state=ON' in result.stdout.decode()
+
+        logger.debug(f'AIRPLANE switching is started: {serial}, type: {device_model}')
+
+        if not is_display_on:
+            for _ in range(3): # Wake up display and check its status
+                logger.debug(f'Waking display UP: serial: {serial}, type: {device_model}')
+
+                wakeup_command_result = subprocess.run(wakeup_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)  # Wake up the device
+                if wakeup_command_result.stderr.strip():
+                    return handle_adb_errors(wakeup_command_result.stderr.strip(), device_id, serial)
+
+                time.sleep(1)
+                start_time = time.time()
+
+                # Check display status within a 5-second time limit
+                logger.debug(f'Checking display STATE: serial: {serial}, type: {device_model}')
+
+                while time.time() - start_time <= 3:
+                    result = subprocess.run(status_display, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+                    if result.stderr.strip():
+                        return handle_adb_errors(result.stderr.strip(), device_id, serial)
+                    if 'state=ON' in result.stdout.decode():
+                        break
+                else:
+                    continue  # Restart the loop to try again
+                break  # Exit the loop if we successfully activated the display
+            else:
+                logger.error(f"Display did not turn on after 3 attempts, serial: {serial}")
+                return False
+        else:
+            logger.debug("Display is already ON, skipping the wake-up cycle.")
+
+        # Open WG settings
+        logger.debug(f'Opening Wireguard: id{device_id}, type: {device_model}')
+        open_result = subprocess.run(open_settings_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        if open_result.stderr.strip():
+            return handle_adb_errors(open_result.stderr.strip(), device_id, serial)
+
+        time.sleep(1)  # Give the UI time to open
+        
+        # tap to switch WG
+        logger.debug(f'Tap to switch WG: id{device_id}, type: {device_model}')
+        tap_result = subprocess.run(screen_input_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        if tap_result.stderr.strip():
+            return handle_adb_errors(tap_result.stderr.strip(), device_id, serial)
+
+        time.sleep(1)
+
+        # Go back
+        logger.debug(f'Go back: id{device_id}, type: {device_model}')
+        back_result = subprocess.run(go_back, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        if back_result.stderr.strip():
+            return handle_adb_errors(back_result.stderr.strip(), device_id, serial)
+
+        return True
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error executing command: {device_id}: {e}")
+        raise Exception("Error executing WG status command")
+
+    except subprocess.TimeoutExpired:
+        logger.error(f'Timeout executing adb ping: {device_id} ({timeout} seconds)')
+        return 'TIMEOUT adb ping'
+
+    except subprocess.SubprocessError as e:
+        logger.error(f'ADB connection error: {device_id}: {e}')
+        return 'ERROR ADB'

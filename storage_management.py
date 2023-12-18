@@ -22,6 +22,11 @@ REDIS_HOST = os.getenv('REDIS_HOST')
 REDIS_PORT = int(os.getenv('REDIS_PORT'))
 REDIS_PASSWORD = os.getenv('REDIS_PASSWORD')
 
+BUSY_RDB=2
+EXPIRY_TIME = 60
+ACT_PUT = 1
+ACT_DEL = 0
+
 def connect_to_mysql():
     try:
         connection = mysql.connector.connect(**MYSQL_SETTINGS)
@@ -180,3 +185,41 @@ def get_redis_lock(job_id, timeout=60, db=1):
     else:
         logger.error("Failed to connect to Redis. Lock not acquired.")
     return acquired, lock
+
+def manage_busy_info_in_redis(serial, action, db=BUSY_RDB, expire=EXPIRY_TIME):
+    try:
+        r = connect_to_redis(db)
+        if r is None:
+            logger.error("Failed to connect to Redis. Aborting operation.")
+            return False
+
+        if action == ACT_PUT:
+            r.setex(serial, expire, '')
+            logger.debug(f"Stored busy info: {serial}")
+            return True
+        if action == ACT_DEL:
+            r.delete(serial)
+            logger.debug(f"Removed busy info: {serial}")
+            return True
+        
+    except redis.ConnectionError:
+        logger.error("Could not connect to Redis reboot DB")
+        return False
+    except redis.TimeoutError:
+        logger.error("Redis operation timed out")
+        return False
+    except Exception as e:
+        logger.error(f"An unknown error occurred while communicating with Redis: {e}")
+        return False
+
+def is_device_busy(serial, db):
+    r = connect_to_redis(db)
+    if r is None:
+        logger.error("Failed to connect to Redis. Skipping reboot check.")
+        return None
+
+    try:
+        return r.exists(serial)  # Возвращает True, если ключ существует, иначе False
+    except Exception as e:
+        logger.error(f"Error checking busy status in Redis: {e}")
+        return None
