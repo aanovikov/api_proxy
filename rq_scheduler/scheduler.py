@@ -1,9 +1,12 @@
-import logging
 import signal
 import time
 import os
 import socket
 from uuid import uuid4
+
+import logger_config
+from logger_config import RQ_SCHEDULER_LOG
+import logging
 
 from datetime import datetime
 from itertools import repeat
@@ -17,7 +20,8 @@ from redis import WatchError
 
 from .utils import from_unix, to_unix, get_next_scheduled_time, rationalize_until
 
-logger = logging.getLogger(__name__)
+logger_config.setup_logger(RQ_SCHEDULER_LOG)
+logger = logging.getLogger(RQ_SCHEDULER_LOG)
 
 class Scheduler(object):
     redis_scheduler_namespace_prefix = 'rq:scheduler_instance:'

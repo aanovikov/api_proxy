@@ -4,6 +4,7 @@ from werkzeug.exceptions import BadRequest
 import time
 import os
 import logger_config
+from logger_config import API_LOG
 import logging
 from logging.handlers import TimedRotatingFileHandler
 from ipaddress import ip_address, AddressValueError
@@ -21,8 +22,8 @@ from redis.exceptions import ResponseError, ConnectionError, TimeoutError, Redis
 
 load_dotenv()
 
-logger_config.setup_logger()
-logger = logging.getLogger()
+logger_config.setup_logger(API_LOG)
+logger = logging.getLogger(API_LOG)
 
 parser = reqparse.RequestParser()
 parser.add_argument('interval_seconds')
