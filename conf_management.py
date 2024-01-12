@@ -177,6 +177,7 @@ def add_user_config(username, mode, http_port, socks_port, id, tgname, parent_ip
 
         # Common parts for HTTP and SOCKS
         auth_part = "auth strong"
+        maxconn = "maxconn 1000"
         allow_part = f"allow {username}"
 
         # Mode and IP-specific parts
@@ -197,6 +198,7 @@ def add_user_config(username, mode, http_port, socks_port, id, tgname, parent_ip
                 f"# Start http for {tgname}: id{id}, {username}",
                 "flush",
                 auth_part,
+                maxconn,
                 allow_part,
                 parent_http,  # 'parent' comes before 'proxy'
                 proxy,
@@ -206,6 +208,7 @@ def add_user_config(username, mode, http_port, socks_port, id, tgname, parent_ip
                 f"# Start socks for {tgname}: id{id}, {username}",
                 "flush",
                 auth_part,
+                maxconn,
                 allow_part,
                 parent_socks,  # 'parent' comes before 'socks'
                 socks,
@@ -216,6 +219,7 @@ def add_user_config(username, mode, http_port, socks_port, id, tgname, parent_ip
                 f"# Start http for {tgname}: id{id}, {username}",
                 "flush",
                 auth_part,
+                maxconn,
                 allow_part,
                 proxy,  # No 'parent', so 'proxy' comes last before comment
                 f"# End http for {tgname}: id{id}, {username}"
@@ -224,6 +228,7 @@ def add_user_config(username, mode, http_port, socks_port, id, tgname, parent_ip
                 f"# Start socks for {tgname}: id{id}, {username}",
                 "flush",
                 auth_part,
+                maxconn,
                 allow_part,
                 socks,  # No 'parent', so 'socks' comes last before comment
                 f"# End socks for {tgname}: id{id}, {username}"
