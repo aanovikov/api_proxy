@@ -5,7 +5,7 @@ import storage_management as sm
 import logging
 from functools import wraps
 import secrets
-import base64
+import string
 from flask import request
 import re
 import ipaddress
@@ -13,8 +13,8 @@ import ipaddress
 logger = logging.getLogger()
 
 def generate_short_token():
-    random_bytes = secrets.token_bytes(15)  # 15 bytes should generate a 20-character token when base64 encoded
-    token = base64.urlsafe_b64encode(random_bytes).decode('utf-8')
+    alphabet = string.ascii_letters + string.digits  # a-z, A-Z, 0-9
+    token = ''.join(secrets.choice(alphabet) for _ in range(20))
     return token
 
 def requires_role(required_role):
