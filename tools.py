@@ -9,13 +9,19 @@ import string
 from flask import request
 import re
 import ipaddress
+import platform
 
 logger = logging.getLogger()
 
 def generate_short_token():
     alphabet = string.ascii_letters + string.digits  # a-z, A-Z, 0-9
     token = ''.join(secrets.choice(alphabet) for _ in range(20))
-    return token
+
+    hostname = platform.node()
+
+    token_with_hostname = f"{hostname}{token}"
+
+    return token_with_hostname
 
 def requires_role(required_role):
     def decorator(f):
