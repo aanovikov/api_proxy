@@ -1489,7 +1489,7 @@ class WGswitcher(Resource):
 api.add_resource(Reboot, '/api/reboot/<string:token>') #user role
 api.add_resource(DeviceStatus, '/api/device_status/<string:token>') #user role
 api.add_resource(ChangeIP, '/api/changeip/<string:token>') #user role
-api.add_resource(AutoChangeIP, '/api/changeip/auto/<string:token>') #user role
+api.add_resource(AutoChangeIP, '/api/changeip_auto/<string:token>') #user role
 api.add_resource(AddUserModem, '/api/add_user_modem/<string:token>') #admin role
 api.add_resource(AddUserAndroid, '/api/add_user_android/<string:token>') #admin role
 api.add_resource(DeleteUser, '/api/delete_user/<string:token>') #admin role
