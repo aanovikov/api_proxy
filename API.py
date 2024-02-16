@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request # jsonifyboot_status
 from flask_restful import Resource, Api, reqparse
 from werkzeug.exceptions import BadRequest
 import time
@@ -9,8 +9,7 @@ import logging
 from logging.handlers import TimedRotatingFileHandler
 from ipaddress import ip_address, AddressValueError
 from dotenv import load_dotenv
-from device_management import adb_reboot_device, get_adb_device_status, os_boot_status
-from network_management import dispatcher, MODEM_HANDLERS, wait_for_ip, airplane_toggle_coordinates, TETHER_SETTINGS, check_airplane, wg_switcher, ping, get_wg_ip
+import network_management as nm
 from settings import TETHERING_COORDINATES, ALLOWED_PROTOCOLS, ROOT, WG_COORDINATES
 import tools as ts
 import storage_management as sm
@@ -19,6 +18,7 @@ from rq_scheduler.scheduler import Scheduler, Queue
 import json
 from datetime import datetime, timedelta
 from redis.exceptions import ResponseError, ConnectionError, TimeoutError, RedisError
+import subprocess
 
 load_dotenv()
 
@@ -70,29 +70,62 @@ class Reboot(Resource):
             mode = user_data.get('mode')
             device_id = user_data.get('id')  # Getting from Redis
             tgname = user_data.get('tgname')
-            # job_id = f'modemup_{serial}'
-            # action = 'modem_on'
+            tid = None
+            device_found = False
 
-            reboot_status = os_boot_status(serial, device, device_id, enable_modem=False)
+            logger.debug("STARTING get_adb_device_status")
+            device_status = nm.get_adb_device_status(serial, device_id, tid=tid) # Получаем adb статус устройства
+            logger.debug(f"DEV_STATUS: {device_status}")
 
-            if reboot_status != 'OK':
-                logger.warning(f"Device id: {device_id}, serial: {serial} is rebooting.")
-                return {'reboot': 'in progress', 'message': 'Device is still rebooting.'}, 409
+            if device_status == "device": # Работа в этой ветке идёт по серийнику, если устройство по нему сразу найдено
+                reboot_status = nm.os_boot_status(serial, device, device_id, enable_modem=False, tid=tid)
 
-            if mode == "android":
-                logger.info(f'REBOOT: {tgname}, id{device_id}')
-                adb_reboot_device(serial, device_id)
-                sm.manage_busy_info_in_redis(serial, ACT_PUT)
-                return {'reboot': 'OK', 'message': 'Reboot is started, wait 1 minute.'}, 200
+                if reboot_status != 'OK':
+                    logger.warning(f"Device id: {device_id}, serial: {serial} is rebooting.")
+                    return {'reboot': 'in progress', 'message': 'Device is still rebooting.'}, 409
 
-            if mode == "modem":
-                logger.info(f'REBOOT: {tgname}, id{device_id}')
-                adb_reboot_device(serial, device_id)
-                sm.manage_busy_info_in_redis(serial, ACT_PUT)
-                # logger.debug(f'Scheduling: id{device_id}, task: {job_id}')
-                # scheduler.enqueue_in(timedelta(minutes=MODEM_UP_TIME), dispatcher, device, serial, action, job_id=job_id)
-                # logger.info(f'CREATED JOB: id{device_id}, {job_id}, switch on modem in {MODEM_UP_TIME} min.')
-                return {'reboot': 'OK', 'message': 'Reboot is started, wait 1 minute.'}, 200
+                if mode == "android":
+                    logger.info(f'REBOOT: {tgname}, id{device_id}')
+                    nm.adb_reboot_device(serial, device_id, tid=tid)
+                    sm.manage_busy_info_in_redis(serial, ACT_PUT)
+                    return {'reboot': 'OK', 'message': 'Reboot is started, wait 1 minute.'}, 200
+
+                if mode == "modem":
+                    logger.info(f'REBOOT: {tgname}, id{device_id}')
+                    nm.adb_reboot_device(serial, device_id, tid=tid)
+                    sm.manage_busy_info_in_redis(serial, ACT_PUT)
+                    return {'reboot': 'OK', 'message': 'Reboot is started, wait 1 minute.'}, 200
+
+            elif device_status == "device_not_found": # Если не найдено по серийному номеру, пробуем по transport_id
+                logger.debug(f'Device id{device_id} serial {serial} not found, trying by TID')
+                tid_usb_dict = nm.get_tid_usb_port()
+                logger.debug(f"tid_usb_dict READY")
+                logger.debug(f"DICT: {tid_usb_dict}")
+
+                for tid, usb_port in tid_usb_dict.items():
+                    cmd_serial_by_tid = [arg.format(tid=tid) for arg in nm.ADB_GET_SERIAL]
+                    logger.debug(f"CMD: {cmd_serial_by_tid}")
+
+                    try:
+                        serial_by_tid = subprocess.check_output(cmd_serial_by_tid, stderr=subprocess.STDOUT).decode('utf-8').strip()
+                        logger.debug(f"SERIAL_by_TID: {serial_by_tid}")
+                        
+                        if serial_by_tid == serial: # При совпадении выполняем команду для устройства
+                            logger.info(f'Device id{device_id} FOUND by TID_{tid}')
+                            # Если серийный номер совпадает, проверяем статус устройства
+                            device_found = True
+                            nm.adb_reboot_device(serial, device_id, tid=tid)
+                            return {'reboot': 'OK', 'message': 'Reboot is started, wait 1 minute.'}, 200
+
+                    except subprocess.CalledProcessError as e:
+                        logger.error(f"Error fetching serial by tid {tid}: {e}")
+                        
+                if not device_found:
+                    return f"Device {token} not found"
+
+            else:
+                logger.warning(f"Device is not in a good state: {device_status}")
+                return {'status': 'seems disconnected', 'message': f'Device is {device_status}'}, 400
 
             logger.error(f"Unknown mode provided for device id: {device_id}, serial: {serial}.")
             return {'error': 'Unknown mode provided'}, 400
@@ -108,6 +141,8 @@ class DeviceStatus(Resource):
             logger.debug("STATUS")
 
             serial = request.args.get('serial')  # Get serial from query params
+            tid = None
+            device_found = False
 
             if serial:
                 # For admin: serial directly provided
@@ -124,22 +159,48 @@ class DeviceStatus(Resource):
                 device_id = user_data.get('id')
                 tgname = user_data.get('tgname')
 
+                logger.debug(f"REDIS_DATA: {serial}, {device}, {device_id}")
+                
                 user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=device_id)
                 
                 logger.info(f"STATUS: {user_log_credentials}")
 
-            device_status = get_adb_device_status(serial, device_id)
+            logger.debug("STARTING get_adb_device_status")
+            device_status = nm.get_adb_device_status(serial, device_id, tid=tid) # Получаем adb статус устройства
+            logger.debug(f"DEV_STATUS: {device_status}")
 
             if device_status == "device":
-                for i in range(3):
-                    status = os_boot_status(serial, device, device_id, enable_modem=False)
-                    if status == 'OK':
-                        #logger.info(f"Device {serial} is READY!")
-                        return {'status': 'OK', 'message': 'Device is ready.'}, 200
-                    else:
-                        logger.warning(f"Device is not ready yet: {status}. Retry {i+1}/3")
-                        time.sleep(2)
-                return {'status': 'in progress', 'message': 'Device not ready.'}, 200
+                logger.debug(f"GO to check_device_ready")
+                status = nm.check_device_ready(serial, device, device_id, tid=tid)
+                logger.info(f"STATUS: {status}")
+                return status
+
+            elif device_status == "device_not_found": # не найдено по серийному номеру, пробуем по transport_id
+                logger.debug(f'Device id{device_id} serial {serial} not found, trying by TID')
+                tid_usb_dict = nm.get_tid_usb_port()
+                logger.debug(f"DICT: {tid_usb_dict}")
+
+                for tid, usb_port in tid_usb_dict.items():
+                    cmd_serial_by_tid = [arg.format(tid=tid) for arg in nm.ADB_GET_SERIAL]
+                    logger.debug(f"CMD: {cmd_serial_by_tid}")
+
+                    try:
+                        serial_by_tid = subprocess.check_output(cmd_serial_by_tid, stderr=subprocess.STDOUT).decode('utf-8').strip()
+                        logger.debug(f"SERIAL_by_TID: {serial_by_tid}")
+                        
+                        if serial_by_tid == serial:
+                            logger.info(f'Device id{device_id} FOUND by TID {tid}')
+                            # Если серийный номер совпадает, проверяем статус устройства
+                            device_found = False
+                            status = nm.check_device_ready(serial, device, device_id, tid)
+                            logger.info(f"STATUS: {status}")
+                            return status
+
+                    except subprocess.CalledProcessError as e:
+                        logger.error(f"Error fetching serial by tid {tid}: {e}")
+                        
+                if not device_found:
+                    return f"Device {token} not found"
 
             else:
                 logger.warning(f"Device is not in a good state: {device_status}")
@@ -164,6 +225,8 @@ class ChangeIP(Resource):
             socks_port = user_data.get('socks_port')
             last_ip_change_time = user_data.get('last_ip_change_time')
             current_time = datetime.now()
+            tid = None
+            device_found = False
 
             user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id)
 
@@ -171,7 +234,7 @@ class ChangeIP(Resource):
                 logger.error(f"Serial NOT found in redis: id{id}, user {username}, serial: {serial}")
                 return {'error': 'Serial not found'}, 400
             
-            busy_status = sm.is_device_busy(serial, BUSY_RDB)
+            busy_status = sm.is_device_busy(serial, BUSY_RDB) # Для телефонов, чтобы не давало выполнять другие действия, пока выполняются действия на экране
             if busy_status is None:
                 logger.error(f"Error cheking BUSY status: {serial}, {user_log_credentials}")
 
@@ -181,7 +244,7 @@ class ChangeIP(Resource):
 
             # Если last_ip_change_time не установлен, разрешаем смену IP
             if last_ip_change_time is None:
-                logger.warning("No IP change recorded previously, proceeding with IP change.")
+                logger.info("No IP change recorded previously, proceeding with IP change.")
                 last_ip_change_time = current_time.timestamp()
 
             else:
@@ -195,19 +258,54 @@ class ChangeIP(Resource):
                 user_data['last_ip_change_time'] = current_time.timestamp()
 
             # Check if device has ROOT
-            if device not in ROOT:
+            if device not in ROOT: # Выполяняется если у телефона нет рута
                 logger.debug(f"Airplane on\off via TOUCH: {tgname}, {device}, id{id}, {username}, {serial}")
 
-                if 'toggle_airplane' in MODEM_HANDLERS[device]:
-                    airplane_toggle_result = MODEM_HANDLERS[device]['toggle_airplane'](serial)
+                if 'toggle_airplane' in nm.MODEM_HANDLERS[device]:
+                    airplane_toggle_result = nm.MODEM_HANDLERS[device]['toggle_airplane'](serial)
                 else:
                     logger.error(f"No 'toggle_airplane' for device {device}.")
                     return {'error': 'Operation not supported for this device'}, 400
 
-            else:
-                logger.debug(f"Airplane on\off via CMD: {tgname}, {device}, id{id}, {username}, {serial}")
-                airplane_toggle_result = MODEM_HANDLERS[device]['toggle_airplane'](serial)
-            
+            else: # Условие выполняется если устройство модем
+                device_status = nm.get_adb_device_status(serial, id, tid=tid) # Получаем adb статус устройства
+                logger.debug(f"DEV_STATUS: {device_status}")
+
+                if device_status == "device":
+                    logger.debug(f"Airplane on\off via CMD: {tgname}, {device}, id{id}, {username}, {serial}")
+                    airplane_toggle_result = nm.MODEM_HANDLERS[device]['toggle_airplane'](serial)
+                
+                elif device_status == "device_not_found": # не найдено по серийному номеру, пробуем по transport_id
+                    logger.debug(f'Device id{id} serial {serial} not found, trying by TID')
+                    tid_usb_dict = nm.get_tid_usb_port()
+
+                    logger.debug(f"DICT: {tid_usb_dict}")
+
+                    for tid, usb_port in tid_usb_dict.items():
+                        cmd_serial_by_tid = [arg.format(tid=tid) for arg in nm.ADB_GET_SERIAL]
+                        logger.debug(f"CMD: {cmd_serial_by_tid}")
+
+                        try:
+                            serial_by_tid = subprocess.check_output(cmd_serial_by_tid, stderr=subprocess.STDOUT).decode('utf-8').strip()
+                            logger.debug(f"SERIAL by TID: {serial_by_tid}")
+                            
+                            if serial_by_tid == serial:
+                                logger.info(f'Device id{id} FOUND by TID {tid}')
+                                device_found = True
+                                # Если серийный номер совпадает, проверяем статус устройства
+                                airplane_toggle_result = nm.MODEM_HANDLERS[device]['toggle_airplane_tid'](tid)
+                                break
+
+                        except subprocess.CalledProcessError as e:
+                            logger.error(f"Error fetching serial by tid {tid}: {e}")
+                            
+                    if not device_found:
+                        return f"Device {token} not found"
+
+                else:
+                    logger.warning(f"Device is not in a good state: {device_status}")
+                    return {'status': 'seems disconnected', 'message': f'Device is {device_status}'}, 400
+
             if airplane_toggle_result:
                 fields_to_update = {'last_ip_change_time': current_time.timestamp()}
                 sm.update_data_in_redis(token, fields_to_update)
@@ -249,12 +347,6 @@ class AutoChangeIP(Resource):
             args = parser.parse_args()
             interval_seconds = int(args['interval_seconds'])
 
-            # def check_job_exists(scheduler, job_id):
-            #     for job in scheduler.get_jobs():
-            #         if job.id == job_id:
-            #             return True  # Job found
-            #     return False  # Job not found
-
             # Obtain a lock to prevent concurrent modifications by other schedulers or workers
             with scheduler.connection.lock(job_id):
                 if check_job_exists(scheduler, job_id):  # Checking if job exists
@@ -271,7 +363,7 @@ class AutoChangeIP(Resource):
                         scheduler.cancel(job_id)
                         scheduler.schedule(
                             scheduled_time=datetime.utcnow(),
-                            func=dispatcher,
+                            func=nm.dispatcher,
                             args=[device_model, serial, action],
                             interval=interval_seconds,
                             repeat=None,  # Repeat forever
@@ -288,7 +380,7 @@ class AutoChangeIP(Resource):
                         # create a new job as it doesn't exist
                         scheduler.schedule(
                             scheduled_time=datetime.utcnow(),
-                            func=dispatcher,
+                            func=nm.dispatcher,
                             args=[device_model, serial, action],
                             interval=interval_seconds,
                             repeat=None,  # Repeat forever
@@ -393,25 +485,6 @@ class DeleteUser(Resource):
                     logger.info(f"Job {job_id} canceled.")
                 else:
                     logger.warning(f"Job {job_id} not found, cannot cancel.")
-
-            # if user_data.get('mode') == 'modem':
-            #     serial = user_data.get('serial')  # Предполагая, что serial хранится в user_data
-            #     device = user_data.get('device')
-            #     device_id = user_data.get('id')
-
-            #     status_handler = MODEM_HANDLERS.get(device, {}).get('modem_status')
-            #     status = status_handler(serial) if status_handler else None
-
-            #     if status == "device_not_found":
-            #         logger.error(f"Device not found, possibly it has lost connection: id{device_id}, serial: {serial}")
-            #     elif status == "timeout":
-            #         logger.error(f"Device timed out, possibly it has lost connection: id{device_id}, serial: {serial}")
-            #     elif status == "rndis":
-            #         logger.debug(f'Device in RNDIS')
-            #         MODEM_HANDLERS[device]['modem_off'](serial)
-            #         logger.info(f"RNDIS OFF: id{device_id}, serial: {serial}")
-            #     else:
-            #         logger.warning(f"NOT in RNDIS: {status}: id{device_id}, serial: {serial}")
 
             logger.info(f"User deleted: {username}")
             return ({f"message": f"User deleted: {username}"}, 200)
@@ -601,22 +674,6 @@ class AddUserModem(Resource):
 
             user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id)
 
-            #validating data
-            # fields_to_validate = {
-            #     # 'username': ts.is_valid_logopass,
-            #     # 'password': ts.is_valid_logopass,
-            #     # 'serial': ts.is_valid_serial,
-            #     #'device': ts.is_valid_device,
-            #     # 'http_port': ts.is_valid_port,
-            #     # 'socks_port': ts.is_valid_port,
-            #     # 'id': ts.is_valid_id
-            # }
-
-            # for field, validation_func in fields_to_validate.items():
-            #     error_message, error_code = ts.validate_field(field, user_data[field], validation_func)
-            #     if error_message:
-            #         return error_message, error_code
-
             #check existing in redis
             if sm.serial_exists(user_data['serial']):
                 logger.warning(f"Serial already exists: {user_data['serial']}")
@@ -624,8 +681,11 @@ class AddUserModem(Resource):
 
             logger.debug(f"Redis check OK: {user_data['username']}")
             
-            status_handler = MODEM_HANDLERS.get(user_data['device'], {}).get('modem_status')
+            status_handler = nm.MODEM_HANDLERS.get(user_data['device'], {}).get('modem_status')
+            logger.debug(f'LAMBDA_STATUS_HANDLER: {status_handler}')
+
             status = status_handler(user_data['serial']) if status_handler else None
+            logger.debug(f'LAMBDA_STATUS: {status}')
 
             if status == "device_not_found":
                 logger.error("Device not found, possibly it has lost connection")
@@ -636,16 +696,16 @@ class AddUserModem(Resource):
 
             if status == "rndis":
                 interface_name = f"id{user_data['id']}"
-                ip_address = wait_for_ip(interface_name)
+                ip_address = nm.wait_for_ip(interface_name)
                 if ip_address != '127.0.0.1':
                     logger.debug(f"Modem is already on, IP: {ip_address}")
 
             else:
-                handler = MODEM_HANDLERS.get(user_data['device'], {}).get('modem_on')
+                handler = nm.MODEM_HANDLERS.get(user_data['device'], {}).get('modem_on')
                 logger.debug(f'HANDLER 1: {handler}, maybe wrong device model')
                 handler(user_data['serial'])
                 interface_name = f"id{user_data['id']}"
-                ip_address = wait_for_ip(interface_name)
+                ip_address = nm.wait_for_ip(interface_name)
                 if ip_address != '127.0.0.1':
                     logger.info(f"Modem up success: {user_log_credentials}")
                 else:
@@ -745,7 +805,7 @@ class AddUserAndroid(Resource):
             logger.debug(f"Redis check OK: {user_data['username']}")
 
             #checking modem
-            status_handler = MODEM_HANDLERS.get(user_data['device'], {}).get('modem_status')
+            status_handler = nm.MODEM_HANDLERS.get(user_data['device'], {}).get('modem_status')
             status = status_handler(user_data['serial']) if status_handler else None
             
             if status == "device_not_found":
@@ -756,7 +816,7 @@ class AddUserAndroid(Resource):
                 return {"message": "Device timed out, possibly it has lost connection"}, 500
 
             if status == "rndis":
-                handler = MODEM_HANDLERS.get(user_data['device'], {}).get('modem_off')
+                handler = nm.MODEM_HANDLERS.get(user_data['device'], {}).get('modem_off')
                 handler(user_data['serial'])
                 logger.info("Modem turned off successfully")
             else:
@@ -1089,7 +1149,7 @@ class ModemStatus(Resource):
                 logger.error("Serial number not found in user data.")
                 return {'error': 'Serial number not found'}, 400
 
-            handler = MODEM_HANDLERS.get(device_model, {}).get('modem_status')
+            handler = nm.MODEM_HANDLERS.get(device_model, {}).get('modem_status')
             if not handler:
                 logger.error("Invalid device model provided. Use a correct 'device' field.")
                 return {"message": "Invalid device model provided. Use a correct 'device' field."}, 400
@@ -1149,7 +1209,7 @@ class ModemUp(Resource):
                 logger.info(f"Device is BUSY: {user_log_credentials}")
                 return {'message': 'Device is busy, please try again later'}, 202  # HTTP 202 Accepted
 
-            status_handler = MODEM_HANDLERS.get(device_model, {}).get('modem_status')
+            status_handler = nm.MODEM_HANDLERS.get(device_model, {}).get('modem_status')
             status = status_handler(serial) if status_handler else None
 
             if status == "device_not_found":
@@ -1161,16 +1221,16 @@ class ModemUp(Resource):
 
             if mode == "modem":
                 if status == "rndis":
-                    ip_address = wait_for_ip(interface_name)
+                    ip_address = nm.wait_for_ip(interface_name)
                     if ip_address != '127.0.0.1':
                         logger.info(f"MODEM IS ALREADY ON: {user_log_credentials}")
                         return {"message": "Modem is already on", "ip_address": ip_address}, 200
                     logger.error("Interface not ready, unable to get IP address")
                     return {"message": "Interface not ready, unable to get IP address"}, 500
                 else:
-                    handler = MODEM_HANDLERS.get(device_model, {}).get('modem_on')
+                    handler = nm.MODEM_HANDLERS.get(device_model, {}).get('modem_on')
                     handler(serial)
-                    ip_address = wait_for_ip(interface_name)
+                    ip_address = nm.wait_for_ip(interface_name)
                     if ip_address != '127.0.0.1':
                         logger.info(F"MODEM ON SUCCEES: {user_log_credentials}")
                         return {"message": "Modem turned on successfully", "ip_address": ip_address}, 200
@@ -1179,7 +1239,7 @@ class ModemUp(Resource):
 
             elif mode == "android":
                 if status == "rndis":
-                    handler = MODEM_HANDLERS.get(device_model, {}).get('modem_off')
+                    handler = nm.MODEM_HANDLERS.get(device_model, {}).get('modem_off')
                     handler(serial)
                     logger.info(F"MODEM OFF SUCCEES: {user_log_credentials}")
                     return {"message": "Modem turned off successfully"}, 200
@@ -1222,7 +1282,7 @@ class AirplaneStatus(Resource):
                 logger.error(f"Serial number not found, id{id}")
                 return {'error': 'Serial number not found'}, 400
 
-            status = check_airplane(serial_number)
+            status = nm.check_airplane(serial_number)
 
             if status == 1:
                 logger.info(f"AIRPLANE is ON: {user_log_credentials}")
@@ -1276,14 +1336,14 @@ class AirplaneOn(Resource):
             # Check if device has ROOT
             if device not in ROOT:
                 logger.debug(f"Airplane ON via TOUCH: id{id}({serial}), {device}")
-                if 'enable_airplane_mode' in MODEM_HANDLERS[device]:
-                    airplane_on_result = MODEM_HANDLERS[device]['enable_airplane_mode'](serial)
+                if 'enable_airplane_mode' in nm.MODEM_HANDLERS[device]:
+                    airplane_on_result = nm.MODEM_HANDLERS[device]['enable_airplane_mode'](serial)
                 else:
                     logger.error(f"No 'enable_airplane_mode': id{id}({serial}), {device}")
                     return {'error': 'Operation not supported for this device'}, 400
             else:
                 logger.debug(f"Airplane ON via CMD: id{id}({serial}), {device}")
-                airplane_on_result = MODEM_HANDLERS[device]['enable_airplane_mode'](serial)
+                airplane_on_result = nm.MODEM_HANDLERS[device]['enable_airplane_mode'](serial)
                 # airplane_toggle_cmd_su(serial, device)
             
             if airplane_on_result:
@@ -1335,14 +1395,14 @@ class AirplaneOff(Resource):
             # Check if device has ROOT
             if device not in ROOT:
                 logger.debug(f"Airplane OFF via TOUCH: id{id}({serial}), {device}")
-                if 'disable_airplane_mode' in MODEM_HANDLERS[device]:
-                    airplane_off_result = MODEM_HANDLERS[device]['disable_airplane_mode'](serial)
+                if 'disable_airplane_mode' in nm.MODEM_HANDLERS[device]:
+                    airplane_off_result = nm.MODEM_HANDLERS[device]['disable_airplane_mode'](serial)
                 else:
                     logger.error(f"No 'disable_airplane_mode': id{id}({serial}), {device}")
                     return {'error': 'Operation not supported for this device'}, 400
             else:
                 logger.debug(f"Airplane OFF via CMD: id{id}({serial}), {device}")
-                airplane_off_result = MODEM_HANDLERS[device]['disable_airplane_mode'](serial)
+                airplane_off_result = nm.MODEM_HANDLERS[device]['disable_airplane_mode'](serial)
                 # airplane_toggle_cmd_su(serial, device)
             
             if airplane_off_result:
@@ -1389,22 +1449,22 @@ class WGstatus(Resource):
 
             try:
                 # checking switcher status in the app
-                get_wg_ip_result = get_wg_ip(serial, id)
-                logger.debug(f"get_wg_ip result: {get_wg_ip_result}")
+                nm.get_wg_ip_result = nm.get_wg_ip(serial, id)
+                logger.debug(f"nm.get_wg_ip result: {nm.get_wg_ip_result}")
 
-                if isinstance(get_wg_ip_result, bool):
-                    if get_wg_ip_result:
-                        wg_switcher_status = 'ON'
+                if isinstance(nm.get_wg_ip_result, bool):
+                    if nm.get_wg_ip_result:
+                        nm.wg_switcher_status = 'ON'
                     else:
-                        wg_switcher_status = 'OFF'
+                        nm.wg_switcher_status = 'OFF'
                         wg_connection_status = 'disconnected'
-                        logger.info(f"WG STATUS: {wg_switcher_status}, {wg_connection_status}: {user_log_credentials}")
-                        return {"switcher": wg_switcher_status, "status": wg_connection_status}, 200
+                        logger.info(f"WG STATUS: {nm.wg_switcher_status}, {wg_connection_status}: {user_log_credentials}")
+                        return {"switcher": nm.wg_switcher_status, "status": wg_connection_status}, 200
 
                 else:
-                    wg_switcher_status = 'unknown'
-                    wg_connection_status = get_wg_ip_result
-                    return {"switcher": wg_switcher_status, "status": get_wg_ip_result}, 500
+                    nm.wg_switcher_status = 'unknown'
+                    wg_connection_status = nm.get_wg_ip_result
+                    return {"switcher": nm.wg_switcher_status, "status": nm.get_wg_ip_result}, 500
             
             except Exception as e:
                 logger.error(f"IP checking error: {e}")
@@ -1427,8 +1487,8 @@ class WGstatus(Resource):
                 logger.error(f"Ping checking error: {e}")
                 return {"message": str(e)}, 500
 
-            logger.info(f"WG STATUS: {wg_switcher_status}, {wg_connection_status}: {user_log_credentials}")
-            return {"switcher": wg_switcher_status, "status": wg_connection_status}, 200
+            logger.info(f"WG STATUS: {nm.wg_switcher_status}, {wg_connection_status}: {user_log_credentials}")
+            return {"switcher": nm.wg_switcher_status, "status": wg_connection_status}, 200
 
         except Exception as e:
             logger.exception("An error occurred")
@@ -1469,17 +1529,17 @@ class WGswitcher(Resource):
                     
             logger.debug(f"WG SWITCHING: {user_log_credentials}, {device}")
                 
-            if device not in MODEM_HANDLERS or 'wg_switcher' not in MODEM_HANDLERS[device]:
+            if device not in nm.MODEM_HANDLERS or 'nm.wg_switcher' not in nm.MODEM_HANDLERS[device]:
                 logger.error(f"No WG switcher handler for device: {device}")
                 return {'error': 'WG switcher handler not found for device'}, 400
 
-            wg_switcher_result = MODEM_HANDLERS[device]['wg_switcher'](serial)
+            nm.wg_switcher_result = nm.MODEM_HANDLERS[device]['nm.wg_switcher'](serial)
 
-            if isinstance(wg_switcher_result, bool) and wg_switcher_result:
+            if isinstance(nm.wg_switcher_result, bool) and nm.wg_switcher_result:
                 logger.info(f"WG SWITCHING SUCCESS: {user_log_credentials}")
                 return {'status': 'success'}, 200
             else:
-                return {'status': 'error', 'message': wg_switcher_result}, 500
+                return {'status': 'error', 'message': nm.wg_switcher_result}, 500
 
         except Exception as e:
             logger.error(f"An error occurred: {e}")
@@ -1506,7 +1566,7 @@ api.add_resource(AirplaneStatus, '/api/airplanestatus/<string:token>') #admin ro
 api.add_resource(AirplaneOn, '/api/airplane_on/<string:token>') #admin role
 api.add_resource(AirplaneOff, '/api/airplane_off/<string:token>') #admin role
 api.add_resource(WGstatus, '/api/wg_status/<string:token>') #admin role
-api.add_resource(WGswitcher, '/api/wg_switcher/<string:token>') #admin role
+api.add_resource(WGswitcher, '/api/nm.wg_switcher/<string:token>') #admin role
 
 if __name__ == '__main__':
     app.run(debug=True)

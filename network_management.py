@@ -10,7 +10,8 @@ import re
 from settings import TETHERING_COORDINATES, AIRPLANE_MODE_SETTINGS, WG_COORDINATES
 from storage_management import manage_busy_info_in_redis
 
-logger = logging.getLogger()
+ADB_DEVICES_TID = ['adb', 'devices', '-l']
+ADB_GET_SERIAL = ['adb', '-t', '{tid}', 'shell', 'getprop', 'ro.serialno']
 
 AIRPLANE_ON_CMD_SU = "su -c 'settings put global airplane_mode_on 1; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true'"
 AIRPLANE_OFF_CMD_SU = "su -c 'settings put global airplane_mode_on 0; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false'"
@@ -25,6 +26,7 @@ TETHER_SETTINGS = "adb -s {} shell am start -n com.android.settings/.TetherSetti
 ACTIVE_WINDOW = "adb -s {} shell dumpsys window windows | grep -E 'mCurrentFocus'"
 ACTIVE_WINDOW_ANDROID_10 = "'adb -s {} shell dumpsys window displays | grep -E 'mCurrentFocus'"
 AIRPLANE_STATUS = "adb -s {} shell settings get global airplane_mode_on"
+AIRPLANE_STATUS_TID = "adb -t {} shell settings get global airplane_mode_on"
 SCREEN_INPUT = "adb -s {} shell input tap {} {}"
 RNDIS_STATUS = "adb -s {} shell ip a | grep -E 'usb|rndis'"
 WG_OPEN = "adb -s {} shell am start -n com.wireguard.android/com.wireguard.android.activity.MainActivity"
@@ -33,6 +35,152 @@ PING = "adb -s {} shell 'ping -c4 10.55.55.1'"
 
 ACT_PUT = 1
 ACT_DEL = 0
+
+logger = logging.getLogger()
+
+def check_device_ready(serial, device, device_id, tid=None):
+    for i in range(3):
+        status = os_boot_status(serial, device, device_id, enable_modem=False, tid=tid)
+        if status == 'OK':
+            logger.info(f"Device {serial} is READY!")  # Используйте logger.info для подтверждения готовности устройства
+            return {'status': 'OK', 'message': 'Device is ready.'}, 200
+        else:
+            logger.warning(f"Device is not ready yet: {status}. Retry {i+1}/3")
+            time.sleep(2)
+    return {'status': 'in progress', 'message': 'Device not ready.'}, 200
+
+def get_tid_usb_port():
+    result = {}
+
+    logging.debug("starting run subprocess cmd")
+    try:
+        adb_output = subprocess.check_output(ADB_DEVICES_TID).decode("utf-8")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error running adb devices -l: {e}")
+        raise e
+
+    # Проверка наличия устройств
+    logging.debug("starting get adb devices list")
+    if "List of devices attached" in adb_output:
+        adb_lines = adb_output.strip().split('\n')
+    else:
+        logging.warning("No devices found in adb devices output")
+        return result
+
+    # Регулярное выражение для поиска transport_id и usb
+    pattern = re.compile(r'device usb:([^\s]+).*transport_id:(\d+)')
+
+    for line in adb_lines:
+        match = pattern.search(line)
+        if match:
+            usb_bus, transport_id = match.groups()
+            result[transport_id] = usb_bus
+        else:
+            logging.debug(f"Skipping line, no match found: {line}")
+
+    if not result:
+        logging.warning("No devices with transport_id found in adb devices output")
+    else:
+        logging.info("Got adb devices list successfully.")
+
+    return result
+
+def adb_reboot_device(serial, device_id, tid=None):
+    adb_reboot = f"adb -s {serial} reboot" if not tid else f"adb -t {tid} reboot"
+    logger.debug(f"Executing reboot: id{device_id}, serial: {serial}")
+    result = subprocess.run(adb_reboot.split(), stdout=subprocess.PIPE)
+    logger.debug(f"ADB reboot output : {result.stdout.decode()}")
+
+def get_adb_device_status(serial, device_id, max_retries=5, delay=3, tid=None):
+    logger.debug("INSIDE get_adb_device_status")
+    print('TEST LOGS')
+    
+    adb_command = ["adb", "-s", serial, "get-state"] if not tid else ["adb", "-t", tid, "get-state"]
+    logger.debug(f"ADB_CMD: {adb_command}")
+
+    device_reference = serial if not tid else f"TID_{tid}"
+
+    for i in range(max_retries):
+        try:
+            output = subprocess.check_output(adb_command, stderr=subprocess.STDOUT).decode('utf-8').strip()
+            
+            logger.info(f"Device status: {output}, id: {device_id}, reference: {device_reference}")
+            
+            if output == "device":
+                return "device"
+            elif output in ["offline", "unauthorized", "bootloader"]:
+                return output
+                
+        except subprocess.CalledProcessError as e:
+            error_output = e.output.decode('utf-8').strip()
+
+            if f"device '{serial}' not found" in error_output:
+                return "device_not_found"
+            logger.error(f"Attempt {i+1}: id: {device_id}, reference: {device_reference}, {error_output}")
+            
+        time.sleep(delay)
+        delay *= 2  # Экспоненциальная задержка
+
+    logger.error(f"Max retries reached. Device not stable: id: {device_id}, reference: {device_reference}")
+    return "Unknown ADB status"
+
+def os_boot_status(serial, device, device_id, enable_modem=False, tid=None):
+    # Если tid предоставлен, работаем с ним, иначе используем serial
+    adb_command_prefix = f"adb -s {serial}" if not tid else f"adb -t {tid}"
+
+    # Проверяем статус ADB до выполнения команды getprop
+    device_status = get_adb_device_status(serial, device_id, tid=tid) if tid else get_adb_device_status(serial, device_id)
+    if device_status != "device":
+        logger.warning(f"ADB NOT READY: {device_status} waiting 10s for next attempt")
+        return f'ADB NOT READY: {device_status} waiting 10s for next attempt'
+    logger.debug(f'ADB READY: {device_status}, id{device_id}, serial: {serial}')
+
+    adb_get_boot_completed = f"{adb_command_prefix} shell getprop sys.boot_completed"
+    logger.debug(f"OS BOOT checking: id{device_id}, serial: {serial}")
+
+    try:
+        process = Popen(adb_get_boot_completed.split(), stdout=PIPE, stderr=PIPE)
+        stdout, stderr = process.communicate(timeout=10)
+        output = stdout.decode('utf-8').strip()
+
+        if output == '1':
+            logger.debug(f"OS READY: id{device_id}, serial: {serial}")
+            if enable_modem:
+                logger.debug(f'Requires to turn modem ON: id{device_id}, serial: {serial}')
+
+                if device not in MODEM_HANDLERS:
+                    logger.error(f"Unknown device model: {device}. Can't reestablish rndis for ID: {device_id}, serial: {serial}")
+                    return 'Device model not supported'
+                            
+                for attempt in range(3):
+                    logger.debug(f'Calling MODEM_HANDLERS to turn modem ON: id{device_id}, serial: {serial}')
+                    MODEM_HANDLERS[device]['on'](serial)
+                    logger.debug(f'PAUSE 5s. before check RNDIS iface')
+                    time.sleep(5)
+
+                    logger.debug(f'Cheking RNDIS iface: id{device_id}, serial: {serial}')
+                    if check_rndis_iface(device_id, serial):
+                        logger.info(f"Modem turned on: id{device_id}, serial: {serial}")  # Вызываем функцию для включения режима модема
+                        scheduler.remove_job(f"modem_{serial}")
+                        break
+                    else:
+                        logger.warning(f"Attempt {attempt+1}: Failed to turn on modem. Retrying...")
+                        logger.debug(f'PAUSE 3s. before next attempt to turn on modem')
+                        time.sleep(3)
+                else:
+                    logger.error(f"Failed to turn on modem after 3 attempts: id{device_id}, serial: {serial}")
+
+            return 'OK'
+        else:
+            logger.info(f'OS NOT READY: id{device_id}, serial: {serial if not tid else "using TID"}')
+            return 'Reboot in progress'
+
+    except TimeoutExpired:
+        logger.error(f"Timeout reboot checking for ID: {device_id}, serial: {serial}")
+        return 'Timeout reboot checking'
+    except subprocess.CalledProcessError:
+        logger.error(f"CalledProcessError reboot checking for ID: {device_id}, serial: {serial}")
+        return 'Error checking boot status'
 
 def dispatcher(device_model, serial, action):
     func = MODEM_HANDLERS.get(device_model, {}).get(action)
@@ -281,11 +429,12 @@ def modem_toggle_cmd(serial, mode):
     except Exception as e:
         logger.error(f"An unexpected error occurred: {e}, serial: {serial}")
 
-def modem_get_status(serial, device_model):
+def modem_get_status(serial, device_model, tid=None):
     logger.debug(f"Checking modem status: serial: {serial}, device model: {device_model}")
+    logger.info(f"Checking modem status: serial: {serial}, device model: {device_model}")
 
     # Базовая команда для запроса статуса модема
-    base_command = f"adb -s {serial} shell svc usb getFunction"
+    base_command = f"adb -s {serial} shell svc usb getFunction" # if not tid else f"adb -t {tid} shell svc usb getFunction"
 
     # Изменяем команду в зависимости от типа устройства
     if device_model in ('SM-A015F', 'J20', '5033D_RU', 'SM-J400F', 'Pixel 2'):
@@ -299,23 +448,48 @@ def modem_get_status(serial, device_model):
 
     try:
         stdout, stderr = process.communicate(timeout=10)  # 10 секунд таймаут
-        error = stderr.decode()
+        output = stdout.decode().strip()
+        error = stderr.decode().strip()
         logger.debug(f'COMMAND OUTPUT: {error}')
 
-        if f"device '{serial}' not found" in error:
-            logger.error(f"Device not found: serial {serial} ")
+        if f"device '{serial}' not found" in error and not tid:
+            logger.info(f"Device {serial} not found, trying to find by TID")
+            tid_usb_dict = get_tid_usb_port()  # Получаем словарь с tid и USB портами
+            device_found = False
+            
+            for tid, usb_port in tid_usb_dict.items(): 
+                adb_cmd_with_tid = f"adb -t {tid} shell svc usb getFunction"
+
+                process_tid = Popen(adb_cmd_with_tid.split(), stdout=PIPE, stderr=PIPE)
+                stdout_tid, stderr_tid = process_tid.communicate(timeout=10)
+                output_tid = stdout_tid.decode().strip()
+                error_tid = stderr_tid.decode().strip()
+
+                if "rndis" in output_tid or "rndis" in error_tid:
+                    logger.debug(f"Device found by TID {tid} is in RNDIS mode")
+                    return "rndis"
+                else:
+                    logger.debug(f"Device found by TID {tid} is NOT in RNDIS mode")
+                    continue
+                                   
             return "device_not_found"
+
         elif "rndis" in error:
-            logger.debug(f"Device is MODEM: serial {serial}")
+            logger.debug(f"Device is in RNDIS mode: serial {serial}, tid: {tid}")
             return "rndis"
         else:
-            logger.debug(f"Device is NOT MODEM: serial {serial}")
+            logger.debug(f"Device is NOT in RNDIS mode: serial {serial}, tid: {tid}")
             return "rndis_off"
 
     except TimeoutExpired:
         process.kill()
-        logger.error(f"Timeout modem status checking: serial {serial}")
+        logger.error(f"Timeout checking modem status for serial {serial}, tid: {tid}")
         return "timeout"
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error checking modem status for serial {serial}, tid: {tid}: {e}")
+        return "error"
+        
+    return "unknown"
 
 MODEM_HANDLERS = {
     'SM-A015F': {
@@ -393,7 +567,8 @@ MODEM_HANDLERS = {
         'modem_on': lambda sn: modem_toggle_cmd(sn, 'rndis'),
         'modem_off': lambda sn: modem_toggle_cmd(sn, 'none'),
         'modem_status': lambda sn: modem_get_status(sn, 'msm8916_32_512'),
-        'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'msm8916_32_512'),
+        'toggle_airplane': lambda sn: airplane_toggle_cmd('msm8916_32_512', serial=sn),
+        'toggle_airplane_tid': lambda tid: airplane_toggle_cmd('msm8916_32_512', tid=tid),
         'enable_airplane_mode': lambda sn: enable_airplane_mode_cmd(sn, 'msm8916_32_512'),
         'disable_airplane_mode': lambda sn: disable_airplane_mode_cmd(sn, 'msm8916_32_512')
     },
@@ -401,15 +576,16 @@ MODEM_HANDLERS = {
         'modem_on': lambda sn: modem_toggle_cmd(sn, 'rndis'),
         'modem_off': lambda sn: modem_toggle_cmd(sn, 'none'),
         'modem_status': lambda sn: modem_get_status(sn, 'UFI'),
-        'toggle_airplane': lambda sn: airplane_toggle_cmd(sn, 'UFI'),
+        'toggle_airplane': lambda sn: airplane_toggle_cmd('UFI', serial=sn),
+        'toggle_airplane_tid': lambda tid: airplane_toggle_cmd('UFI', tid=tid),
         'enable_airplane_mode': lambda sn: enable_airplane_mode_cmd(sn, 'UFI'),
         'disable_airplane_mode': lambda sn: disable_airplane_mode_cmd(sn, 'UFI')
     }
 }
 
-def check_airplane(serial):
+def check_airplane(serial=None, tid=None):
     try:
-        status_airplane = AIRPLANE_STATUS.format(serial)
+        status_airplane = AIRPLANE_STATUS.format(serial) if serial else AIRPLANE_STATUS_TID.format(tid)
         result = subprocess.run(status_airplane, shell=True, capture_output=True, text=True, timeout=10)
         if '1' in result.stdout:
             return 1
@@ -426,10 +602,14 @@ def check_airplane(serial):
         logger.error("Timeout occurred")
         raise
 
-def airplane_toggle_cmd(serial, device_model):
+def airplane_toggle_cmd(device_model, serial=None, tid=None):
+    if serial is None and tid is None:
+        raise ValueError("Serial or tid are required")
+
     try:
-        delay = 1
-        adb_base_command = ["adb", "-s", serial, "shell"]
+        delay = 2
+        adb_base_command = ["adb", "-s", serial, "shell"] if serial else ["adb", "-t", tid, "shell"]
+
         logger.debug(f"Toggling airplane mode: type: {device_model}, {serial}")
 
         # Включаем режим в самолете
@@ -441,11 +621,17 @@ def airplane_toggle_cmd(serial, device_model):
         
         logger.debug(f"Pause for {delay} seconds")
         time.sleep(delay)
-
-        if check_airplane(serial) == 1:
-            logger.debug(f"AIRPLANE ON")
+        
+        if serial:
+            if check_airplane(serial=serial) == 1:
+                logger.debug(f"AIRPLANE ON")
+            else:
+                raise RuntimeError("Failed to turn ON airplane mode")
         else:
-            raise RuntimeError("Failed to turn ON airplane mode")
+            if check_airplane(tid=tid) == 1:
+                logger.debug(f"AIRPLANE ON")
+            else:
+                raise RuntimeError("Failed to turn ON airplane mode")
 
         # Выключаем режим в самолете
         airplane_off_command = adb_base_command + [AIRPLANE_OFF_CMD]
@@ -454,10 +640,16 @@ def airplane_toggle_cmd(serial, device_model):
         logger.debug(f"Airplane OFF command stdout: {result_off.stdout}")
         logger.debug(f"Airplane OFF command stderr: {result_off.stderr}")
         
-        if check_airplane(serial) == 0:
-            logger.debug(f"AIRPLANE OFF")
+        if serial:
+            if check_airplane(serial=serial) == 0:
+                logger.debug(f"AIRPLANE OFF")
+            else:
+                raise RuntimeError("Failed to turn OFF airplane mode")
         else:
-            raise RuntimeError("Failed to turn OFF airplane mode")
+            if check_airplane(tid=tid) == 0:
+                logger.debug(f"AIRPLANE OFF")
+            else:
+                raise RuntimeError("Failed to turn ON airplane mode")
 
         logger.debug(f"Airplane mode toggled: serial {serial}")
         return True
