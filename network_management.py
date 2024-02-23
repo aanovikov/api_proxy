@@ -9,6 +9,7 @@ import time
 import re
 from settings import TETHERING_COORDINATES, AIRPLANE_MODE_SETTINGS, WG_COORDINATES
 from storage_management import manage_busy_info_in_redis
+import logger_config
 
 ADB_DEVICES_TID = ['adb', 'devices', '-l']
 ADB_GET_SERIAL = ['adb', '-t', '{tid}', 'shell', 'getprop', 'ro.serialno']
