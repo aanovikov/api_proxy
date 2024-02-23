@@ -1,4 +1,3 @@
-import logging
 import mysql.connector
 import redis
 import traceback
@@ -6,10 +5,13 @@ from dotenv import load_dotenv
 from redis.exceptions import ResponseError, ConnectionError, TimeoutError, RedisError
 import os
 from redis.lock import Lock
+import logging
+import logger_config
+from logger_config import API_LOG
 
 load_dotenv()
 
-logger = logging.getLogger()
+logger = logging.getLogger(API_LOG)
 
 MYSQL_SETTINGS = {
     "host": os.getenv('MYSQL_HOST'),

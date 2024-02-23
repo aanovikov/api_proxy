@@ -10,6 +10,7 @@ import re
 from settings import TETHERING_COORDINATES, AIRPLANE_MODE_SETTINGS, WG_COORDINATES
 from storage_management import manage_busy_info_in_redis
 import logger_config
+from logger_config import API_LOG
 
 ADB_DEVICES_TID = ['adb', 'devices', '-l']
 ADB_GET_SERIAL = ['adb', '-t', '{tid}', 'shell', 'getprop', 'ro.serialno']
@@ -37,7 +38,7 @@ PING = "adb -s {} shell 'ping -c4 10.55.55.1'"
 ACT_PUT = 1
 ACT_DEL = 0
 
-logger = logging.getLogger()
+logger = logging.getLogger(API_LOG)
 
 def check_device_ready(serial, device, device_id, tid=None):
     for i in range(3):

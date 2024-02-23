@@ -1,14 +1,15 @@
 from textwrap import dedent
-import logging
 import re
 import os
 from dotenv import load_dotenv
 import storage_management as sm
+import logging
+import logger_config
+from logger_config import API_LOG
 
 load_dotenv()
 
-
-logger = logging.getLogger()
+logger = logging.getLogger(API_LOG)
 
 ACL_PATH = os.getenv('ACL_PATH')
 CONFIG_PATH = os.getenv('CONFIG_PATH')

@@ -2,7 +2,6 @@ import redis
 import atexit
 #import device_management as dm
 import storage_management as sm
-import logging
 from functools import wraps
 import secrets
 import string
@@ -10,8 +9,11 @@ from flask import request
 import re
 import ipaddress
 import platform
+import logging
+import logger_config
+from logger_config import API_LOG
 
-logger = logging.getLogger()
+logger = logging.getLogger(API_LOG)
 
 def generate_short_token():
     alphabet = string.ascii_letters + string.digits  # a-z, A-Z, 0-9
