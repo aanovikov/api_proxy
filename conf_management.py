@@ -15,8 +15,6 @@ ACL_PATH = os.getenv('ACL_PATH')
 CONFIG_PATH = os.getenv('CONFIG_PATH')
 CHECKER_IP = '91.107.207.227'
 
-TEST_CFG='/home/zippy/testcfg'
-
 def read_file(filepath):
     try:
         with open(filepath, 'r') as file:
@@ -616,12 +614,12 @@ def update_ip(old_ip, new_ip):
     try:
         logger.debug(f"Changing IP in config: old_ip: {old_ip}, new_ip: {new_ip}")
 
-        with open(TEST_CFG, "r") as file:
+        with open(CONFIG_PATH, "r") as file:
             contents = file.read()
 
         updated_contents = contents.replace(old_ip, new_ip)
 
-        with open(TEST_CFG, "w") as file:
+        with open(CONFIG_PATH, "w") as file:
             file.write(updated_contents)
 
         logging.info(f"IP address has been successfully updated from {old_ip} to {new_ip}")
