@@ -1545,6 +1545,34 @@ class WGswitcher(Resource):
             logger.error(f"An error occurred: {e}")
             return {'status': 'failure', 'message': str(e)}, 500
 
+class UpdateIP(Resource):
+    @ts.requires_role("admin")
+    def patch(self, admin_token):
+
+        try:
+            logger.info("GRASS UPDATE IP")
+
+            data = request.get_json
+            new_ip = data.get('new_ip')
+            old_ip = data.get('old_ip')
+
+            if not new_ip or not old_ip:
+                logger.error("New IP or Old IP is missing.")
+                return {"message": "New IP or Old IP is missing."}, 400
+            
+            update_result = cm.update_ip(old_ip, new_ip)
+            
+            if not update_result:
+                logger.error("Failed to update IP address.")
+                return {"message": "Failed to update IP address."}, 500
+
+            logger.info(f"IP updated: {old_ip} --> {new_ip}")
+            return {"message": f"IP updated: {old_ip} --> {new_ip}"}, 200
+
+        except Exception as e:
+            logger.error(f"An error occurred: {str(e)}")
+            return {"message": "Internal server error"}, 500
+
 #resources
 api.add_resource(Reboot, '/api/reboot/<string:token>') #user role
 api.add_resource(DeviceStatus, '/api/device_status/<string:token>') #user role
@@ -1567,6 +1595,7 @@ api.add_resource(AirplaneOn, '/api/airplane_on/<string:token>') #admin role
 api.add_resource(AirplaneOff, '/api/airplane_off/<string:token>') #admin role
 api.add_resource(WGstatus, '/api/wg_status/<string:token>') #admin role
 api.add_resource(WGswitcher, '/api/nm.wg_switcher/<string:token>') #admin role
+api.add_resource(UpdateIP, '/api/updateip/<string:token>') #admin role
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=False)
