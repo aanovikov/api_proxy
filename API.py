@@ -1552,7 +1552,7 @@ class UpdateIP(Resource):
         try:
             logger.info("GRASS UPDATE IP")
 
-            data = request.get_json
+            data = request.get_json()
             new_ip = data.get('new_ip')
             old_ip = data.get('old_ip')
 
