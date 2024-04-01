@@ -675,9 +675,9 @@ class AddUserModem(Resource):
             user_log_credentials = USER_LOG_CREDENTIALS.format(tgname=tgname, id=id)
 
             #check existing in redis
-            if sm.serial_exists(user_data['serial']):
-                logger.warning(f"Serial already exists: {user_data['serial']}")
-                return {"message": f"Serial already exists: {user_data['serial']}"}, 400
+            # if sm.serial_exists(user_data['serial']):
+            #     logger.warning(f"Serial already exists: {user_data['serial']}")
+            #     return {"message": f"Serial already exists: {user_data['serial']}"}, 400
 
             logger.debug(f"Redis check OK: {user_data['username']}")
             
@@ -798,9 +798,9 @@ class AddUserAndroid(Resource):
             #     if error_message:
             #         return error_message, error_code
 
-            if sm.serial_exists(user_data['serial']):
-                logger.warning(f"Serial already exists: {user_data['serial']}")
-                return {"message": f"Serial already exists: {user_data['serial']}"}, 400
+            # if sm.serial_exists(user_data['serial']):
+            #     logger.warning(f"Serial already exists: {user_data['serial']}")
+            #     return {"message": f"Serial already exists: {user_data['serial']}"}, 400
 
             logger.debug(f"Redis check OK: {user_data['username']}")
 
