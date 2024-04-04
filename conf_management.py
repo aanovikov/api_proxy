@@ -11,6 +11,7 @@ load_dotenv()
 
 logger = logging.getLogger(API_LOG)
 
+CONFIG_1PROXY='/etc/3proxy/1proxy.cfg'
 ACL_PATH = os.getenv('ACL_PATH')
 CONFIG_PATH = os.getenv('CONFIG_PATH')
 CHECKER_IP = '91.107.207.227'
@@ -614,12 +615,12 @@ def update_ip(old_ip, new_ip):
     try:
         logger.debug(f"Changing IP in config: old_ip: {old_ip}, new_ip: {new_ip}")
 
-        with open(CONFIG_PATH, "r") as file:
+        with open(CONFIG_1PROXY, "r") as file:
             contents = file.read()
 
         updated_contents = contents.replace(old_ip, new_ip)
 
-        with open(CONFIG_PATH, "w") as file:
+        with open(CONFIG_1PROXY, "w") as file:
             file.write(updated_contents)
 
         logging.info(f"IP address has been successfully updated from {old_ip} to {new_ip}")
