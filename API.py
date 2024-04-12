@@ -1567,8 +1567,17 @@ class UpdateIP(Resource):
                 return {"message": "Failed to update IP address."}, 500
 
             logger.info(f"IP updated: {old_ip} --> {new_ip}")
+            time.sleep(2)
+
+            command = ["sudo", "systemctl", "restart", "1proxy.service"]
+            subprocess.run(command, check=True)
+
             return {"message": f"IP updated: {old_ip} --> {new_ip}"}, 200
 
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to restart 1proxy service: {e}")
+            return {"message": "Failed to restart 1proxy service"}, 500
+        
         except Exception as e:
             logger.error(f"An error occurred: {str(e)}")
             return {"message": "Internal server error"}, 500
