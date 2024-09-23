@@ -1,6 +1,6 @@
 ALLOWED_PROTOCOLS = ['http', 'socks', 'both']
 
-ROOT = ['SM-A260G', 'SM-A015F', '5033D_RU', 'J20', 'UFI', 'msm8916_32_512']
+ROOT = ['SM-A260G', 'SM-A015F', '5033D_RU', 'J20', 'UFI', 'msm8916_32_512', 'TrebleDroid with GApps']
 
 TETHERING_COORDINATES = {
     'SM-A260G': (465, 545),
@@ -24,5 +24,6 @@ WG_COORDINATES = {
     'SM-J400F': (650, 210),
     'J20': (425, 163),
     'SM-A015F': (637, 238),
+    'TrebleDroid with GApps': (637, 238),
     'Pixel 2': (922, 428)
 }

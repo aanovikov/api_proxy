@@ -439,7 +439,7 @@ def modem_get_status(serial, device_model, tid=None):
     base_command = f"adb -s {serial} shell svc usb getFunction" # if not tid else f"adb -t {tid} shell svc usb getFunction"
 
     # Изменяем команду в зависимости от типа устройства
-    if device_model in ('SM-A015F', 'J20', '5033D_RU', 'SM-J400F', 'Pixel 2'):
+    if device_model in ('SM-A015F', 'J20', '5033D_RU', 'SM-J400F', 'Pixel 2', 'TrebleDroid with GApps'):
         base_command += "s"
         logger.debug(f'BASE COMMAND + S: {base_command}')
     
@@ -502,6 +502,15 @@ MODEM_HANDLERS = {
         'enable_airplane_mode': lambda sn: enable_airplane_mode_cmd_su(sn, 'SM-A015F'),
         'disable_airplane_mode': lambda sn: disable_airplane_mode_cmd_su(sn, 'SM-A015F'),
         'wg_switcher': lambda sn: wg_switcher(sn, 'SM-A015F')
+    },
+    'TrebleDroid with GApps': {
+        'modem_on': lambda sn: modem_toggle_cmd(sn, 'rndis'),
+        'modem_off': lambda sn: modem_toggle_cmd(sn, 'none'),
+        'modem_status': lambda sn: modem_get_status(sn, 'TrebleDroid with GApps'),
+        'toggle_airplane': lambda sn: airplane_toggle_cmd_su(sn, 'TrebleDroid with GApps'),
+        'enable_airplane_mode': lambda sn: enable_airplane_mode_cmd_su(sn, 'TrebleDroid with GApps'),
+        'disable_airplane_mode': lambda sn: disable_airplane_mode_cmd_su(sn, 'TrebleDroid with GApps'),
+        'wg_switcher': lambda sn: wg_switcher(sn, 'TrebleDroid with GApps')
     },
     'SM-A260G': {
         'modem_on': lambda sn: modem_toggle_coordinates_ON(sn, 'SM-A260G'),
