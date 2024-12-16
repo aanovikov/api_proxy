@@ -14,7 +14,7 @@ logger = logging.getLogger(API_LOG)
 CONFIG_1PROXY='/home/proxyuser/1proxy.cfg'
 ACL_PATH = os.getenv('ACL_PATH')
 CONFIG_PATH = os.getenv('CONFIG_PATH')
-CHECKER_IP = '91.107.207.227'
+CHECKER_IP = '_'
 
 def read_file(filepath):
     try:
